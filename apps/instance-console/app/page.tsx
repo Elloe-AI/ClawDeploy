@@ -1,591 +1,709 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useChat } from "@ai-sdk/react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import ChatInput from "@/components/chat-input";
-import SetupModal from "@/components/setup-modal";
-import type { DocsAgentUIMessage } from "@/agent/docs-agent";
-import type { GithubAgentUIMessage } from "@/agent/github-agent";
-import DocsView from "@/components/docs-view";
-import GithubView from "@/components/github-view";
-import type { DocsUIToolInvocation } from "@/tool/docs-tool";
-import type { GitHubUIToolInvocation } from "@/tool/github-tool";
-import Image from "next/image";
 import MarkdownMessage from "@/components/markdown-message";
+import Image from "next/image";
 import Link from "next/link";
-import { GitHubIcon, TelegramIcon, XIcon } from "@/components/icons";
-import {
-  DEFAULT_LLM_MODEL,
-  DEFAULT_LLM_PROVIDER,
-  isLlmProvider,
-  isModelSupported,
-  type LlmProvider,
-} from "@/lib/llm";
-import { documentationUrlOptions } from "@/lib/constants";
-import { buildSuggestions } from "@/lib/suggestions";
 
+const CONTROL_PLANE_URL = (process.env.NEXT_PUBLIC_CONTROL_PLANE_URL ?? "").replace(/\/$/, "");
+const INSTANCE_STORAGE_KEY = "clawdeploy:instance-id";
 
-type ChatUIMessage = DocsAgentUIMessage | GithubAgentUIMessage;
-
-type TrendingRepo = {
-  id: number;
-  full_name: string;
-  html_url: string;
-  description: string | null;
-  language: string | null;
-  stargazers_count: number;
-  forks_count: number;
+type WorkspaceInfo = {
+  id: string;
+  name: string;
+  billingStatus: string;
 };
 
-const LAST_URL_KEY = "docchat:last-url";
-const PROVIDER_KEY = "docchat:provider";
-const MODEL_KEY = "docchat:model";
-const API_KEY_STORAGE = "docchat:api-key";
-const SETUP_COMPLETE_KEY = "docchat:setup-complete";
-const messagesStorageKey = (url: string) => `docchat:messages:${url}`;
+type UserInfo = {
+  id: string;
+  email: string;
+};
 
-function buildSystemMessage(url: string): ChatUIMessage {
-  return {
-    id: `system-${Date.now()}`,
-    role: "system",
-    parts: [
-      {
-        type: "text",
-        text: `Conversation URL: ${url}. Use this URL for tool calls unless the user provides a different one. Respond in Markdown.`,
-      },
-    ],
-  } as ChatUIMessage;
+type AuthPayload = {
+  user: UserInfo;
+  workspace: WorkspaceInfo;
+};
+
+type InstanceSummary = {
+  id: string;
+  name: string;
+  status: string;
+  effectiveStatus: string;
+  killEnabled: boolean;
+  lastHeartbeatAt: string | null;
+  host: {
+    id: string;
+    name: string;
+    baseUrl: string;
+    region: string;
+  };
+  channels: { id: string; provider: string; externalId: string }[];
+  createdAt: string;
+};
+
+type FileItem = {
+  name: string;
+  size: number;
+  updatedAt: string;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  createdAt: string;
+  meta?: {
+    requestId?: string;
+    durationMs?: number;
+    isError?: boolean;
+  };
+};
+
+function apiUrl(path: string) {
+  if (!CONTROL_PLANE_URL) return path;
+  return `${CONTROL_PLANE_URL}${path}`;
 }
 
-function isTextPart(part: unknown): part is { type: "text"; text: string } {
-  return (
-    !!part &&
-    typeof part === "object" &&
-    (part as { type?: string }).type === "text" &&
-    typeof (part as { text?: string }).text === "string"
-  );
+function formatDate(value: string | null) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
 }
 
-function getLastUserText(messages: ChatUIMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
-    if (message.role !== "user") continue;
-    const parts = message.parts ?? [];
-    const partText = parts
-      .filter(isTextPart)
-      .map((part) => part.text)
-      .join("\n");
-    if (partText.trim()) return partText.trim();
+function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes)) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
   }
-  return "";
+  const precision = value >= 10 || idx === 0 ? 0 : 1;
+  return `${value.toFixed(precision)} ${units[idx]}`;
 }
 
-function loadStoredMessages(url: string): ChatUIMessage[] {
-  if (!url || typeof window === "undefined") return [];
-  const raw = window.localStorage.getItem(messagesStorageKey(url));
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as ChatUIMessage[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
+function uniqueList(items: string[]) {
+  return Array.from(new Set(items));
+}
+
+function newId(prefix: string) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
   }
+  return `${prefix}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function buildInitialMessages(url: string): ChatUIMessage[] {
-  if (!url) return [];
-  const stored = loadStoredMessages(url);
-  const hasSystem = stored.some((message) => message.role === "system");
-  if (stored.length === 0 || !hasSystem) {
-    return [buildSystemMessage(url), ...stored];
-  }
-  return stored;
-}
+export default function InstanceConsole() {
+  const [auth, setAuth] = useState<AuthPayload | null>(null);
+  const [authStatus, setAuthStatus] = useState<
+    "loading" | "ready" | "unauthorized" | "error"
+  >("loading");
+  const [authError, setAuthError] = useState<string | null>(null);
 
-function ChatConversation({
-  apiKey,
-  provider,
-  model,
-  chatUrl,
-  isKeyReady,
-  isSetupComplete,
-}: {
-  apiKey: string;
-  provider: LlmProvider;
-  model: string;
-  chatUrl: string;
-  isKeyReady: boolean;
-  isSetupComplete: boolean;
-}) {
-  const chat = useChat<ChatUIMessage>();
-  const { status, sendMessage, messages, setMessages } = chat;
-  const stop = (chat as unknown as { stop?: () => void }).stop;
-  const isChatReady = isSetupComplete && isKeyReady;
-  const isWaiting = status === "streaming" || status === "submitted";
-  const [ellipsis, setEllipsis] = useState("");
-  const suggestions = buildSuggestions({
-    chatUrl,
-    lastUserText: messages ? getLastUserText(messages) : "",
-  });
+  const [instances, setInstances] = useState<InstanceSummary[]>([]);
+  const [instancesLoading, setInstancesLoading] = useState(false);
+  const [instancesError, setInstancesError] = useState<string | null>(null);
+  const [selectedInstanceId, setSelectedInstanceId] = useState("");
 
-  useEffect(() => {
-    if (!chatUrl) {
-      setMessages([]);
-      return;
-    }
-    setMessages(buildInitialMessages(chatUrl));
-  }, [chatUrl, setMessages]);
-
-  useEffect(() => {
-    if (!chatUrl || typeof window === "undefined") return;
-    window.localStorage.setItem(
-      messagesStorageKey(chatUrl),
-      JSON.stringify(messages ?? [])
-    );
-  }, [chatUrl, messages]);
-
-  useEffect(() => {
-    if (!isWaiting) {
-      setEllipsis("");
-      return;
-    }
-    let step = 0;
-    const id = window.setInterval(() => {
-      step = (step + 1) % 4;
-      setEllipsis(".".repeat(step));
-    }, 450);
-    return () => window.clearInterval(id);
-  }, [isWaiting]);
-
-  return (
-    <div className="min-h-screen">
-      {messages?.length ? null : (
-        <div className="pt-8 sm:pt-12">
-          <div className="rounded-3xl border border-zinc-900/60 p-4 shadow-sm sm:p-6">
-            <div className="text-base font-semibold sm:text-lg">
-              Welcome, ask anything about your docs or GitHub repo
-            </div>
-            <div className="mt-2 text-sm text-zinc-400">
-              Paste a docs page URL or a GitHub repo URL and ask questions.
-              Chat will fetch the page, summarize it, and answer follow ups
-              grounded in the retrieved content.
-            </div>
-            {isSetupComplete && !isKeyReady && (
-              <div className="mt-4 rounded-2xl border border-red-900/60 bg-red-950/40 p-3 text-xs text-red-300">
-                Add your API Key to start chatting. It is saved in your
-                browser local storage.
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-      <div className="min-h-screen py-6 sm:py-10">
-        <div className="min-h-screen space-y-6">
-          {messages
-            ?.filter((message) => message.role !== "system")
-            .map((message) => {
-              const isUser = message.role === "user";
-
-              return (
-                <div
-                  key={message.id}
-                  className={`flex w-full gap-3 ${isUser ? "justify-end" : ""}`}
-                >
-                  {!isUser && (
-                    <Image
-                      src="/logo.png"
-                      alt="Chat"
-                      width={32}
-                      height={32}
-                      className="mt-0.5 hidden size-8 shrink-0 rounded-full border border-zinc-900/60 bg-black p-1 object-contain shadow-sm sm:block"
-                    />
-                  )}
-
-                  <div
-                    className={`w-full ${isUser ? "max-w-[92%] sm:max-w-[80%]" : "max-w-full"
-                      }`}
-                  >
-                    <div
-                      className={[
-                        "rounded-3xl px-4 py-3",
-                        isUser
-                          ? "ml-auto border border-zinc-900/60 text-zinc-100 shadow-sm"
-                          : "border border-zinc-900/60 text-zinc-100 shadow-sm",
-                      ].join(" ")}
-                    >
-                      {(() => {
-                        const toolInvocations = message.parts.filter(
-                          (part) =>
-                            part.type === "tool-docs" ||
-                            part.type === "tool-github"
-                        );
-                        const nonToolParts = message.parts.filter(
-                          (part) =>
-                            part.type !== "tool-docs" &&
-                            part.type !== "tool-github"
-                        );
-
-                        return (
-                          <div className="space-y-3">
-                            {nonToolParts.map((part, index) => {
-                              switch (part.type) {
-                                case "text":
-                                  return (
-                                    <MarkdownMessage
-                                      key={index}
-                                      content={part.text}
-                                      isAnimating={isWaiting && !isUser}
-                                      apiKey={apiKey}
-                                      provider={provider}
-                                      model={model}
-                                    />
-                                  );
-
-                                case "step-start":
-                                  return index > 0 ? (
-                                    <div key={index} className="py-1">
-                                      <div className="h-px w-full bg-background" />
-                                    </div>
-                                  ) : null;
-                              }
-                            })}
-
-                            {toolInvocations.length > 0 ? (
-                              <details className="rounded-2xl border border-zinc-900/60 p-3">
-                                <summary className="cursor-pointer select-none text-[11px] font-medium text-zinc-300">
-                                  Tool calls ({toolInvocations.length})
-                                </summary>
-                                <div className="mt-3 space-y-2">
-                                  {toolInvocations.map((part, index) => {
-                                    if (part.type === "tool-docs") {
-                                      const invocation =
-                                        part as DocsUIToolInvocation & {
-                                          toolCallId?: string;
-                                          id?: string;
-                                        };
-                                      return (
-                                        <DocsView
-                                          key={
-                                            invocation.toolCallId ??
-                                            invocation.id ??
-                                            index
-                                          }
-                                          invocation={invocation}
-                                        />
-                                      );
-                                    }
-                                    const invocation =
-                                      part as GitHubUIToolInvocation & {
-                                        toolCallId?: string;
-                                        id?: string;
-                                      };
-                                    return (
-                                      <GithubView
-                                        key={
-                                          invocation.toolCallId ??
-                                          invocation.id ??
-                                          index
-                                        }
-                                        invocation={invocation}
-                                      />
-                                    );
-                                  })}
-                                </div>
-                              </details>
-                            ) : null}
-                          </div>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          {isWaiting ? (
-            <div className="flex w-full gap-3">
-              <Image
-                src="/logo.png"
-                alt="Chat"
-                width={32}
-                height={32}
-                className="mt-0.5 hidden size-8 shrink-0 rounded-full border border-zinc-900/60 bg-black p-1 object-contain shadow-sm sm:block"
-              />
-              <div className="w-full max-w-full">
-                <div className="rounded-3xl border border-zinc-900/60 px-4 py-3 text-zinc-100 shadow-sm">
-                  <div
-                    className="inline-flex items-center gap-1 text-sm leading-relaxed text-zinc-300"
-                    aria-live="polite"
-                  >
-                    Waiting for response
-                    <span className="inline-block w-4 text-left">
-                      {ellipsis}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      </div>
-
-      <footer className="fixed inset-x-0 bottom-0 z-30 border-t border-zinc-900/60 bg-background">
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-28 bg-background" />
-        <div className="pointer-events-auto relative w-full px-4 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-8">
-          <div className="mx-auto w-full max-w-3xl min-w-full md:min-w-0 md:max-w-none lg:max-w-screen-2xl">
-            <ChatInput
-              status={isChatReady ? status : "blocked"}
-              stop={stop}
-              suggestions={suggestions}
-              inputDisabled={!chatUrl || !isChatReady}
-              placeholder={
-                chatUrl
-                  ? "Ask anything about your docs or GitHub repository…"
-                  : "Paste a docs or GitHub URL above to start a conversation…"
-              }
-              onSubmit={(text: string) => {
-                if (!chatUrl || !isChatReady) return;
-                sendMessage(
-                  { text },
-                  {
-                    body: { chatUrl },
-                    headers: {
-                      "x-llm-key": apiKey,
-                      "x-llm-provider": provider,
-                      "x-llm-model": model,
-                    },
-                  }
-                );
-              }}
-            />
-          </div>
-        </div>
-      </footer>
-    </div>
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatStatus, setChatStatus] = useState<"ready" | "submitted">(
+    "ready"
   );
-}
+  const [chatError, setChatError] = useState<string | null>(null);
 
-export default function DocsChat() {
-  const [apiKey, setApiKey] = useState("");
-  const [provider, setProvider] = useState<LlmProvider>(
-    DEFAULT_LLM_PROVIDER
-  );
-  const [model, setModel] = useState(DEFAULT_LLM_MODEL[DEFAULT_LLM_PROVIDER]);
-  const [chatUrl, setChatUrl] = useState("");
-  const [isSetupOpen, setIsSetupOpen] = useState(false);
-  const [isSetupComplete, setIsSetupComplete] = useState(false);
-  const [trendingRepos, setTrendingRepos] = useState<TrendingRepo[]>([]);
-  const [trendingStatus, setTrendingStatus] = useState<
-    "idle" | "loading" | "ready" | "error" | "rate-limited"
-  >("idle");
-  const [trendingMessage, setTrendingMessage] = useState("");
-  const isKeyReady = apiKey.trim().length > 0 && !!model;
+  const [files, setFiles] = useState<FileItem[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+  const [filesError, setFilesError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [resourcesSelected, setResourcesSelected] = useState<string[]>([]);
+  const [resourcesSaved, setResourcesSaved] = useState<string[]>([]);
+  const [resourceSaving, setResourceSaving] = useState(false);
+  const [resourceError, setResourceError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const storedKey = localStorage.getItem(API_KEY_STORAGE);
-    if (storedKey) setApiKey(storedKey);
-    const storedProvider = localStorage.getItem(PROVIDER_KEY);
-    const nextProvider = isLlmProvider(storedProvider)
-      ? storedProvider
-      : DEFAULT_LLM_PROVIDER;
-    setProvider(nextProvider);
-    const storedModel = localStorage.getItem(MODEL_KEY);
-    const nextModel =
-      storedModel && isModelSupported(nextProvider, storedModel)
-        ? storedModel
-        : DEFAULT_LLM_MODEL[nextProvider];
-    setModel(nextModel);
-    const storedUrl = localStorage.getItem(LAST_URL_KEY);
-    if (storedUrl) {
-      setChatUrl(storedUrl);
-    }
-    const storedSetupComplete = localStorage.getItem(SETUP_COMPLETE_KEY) === "true";
-    const hasRequired = Boolean(storedKey && storedUrl);
-    const setupReady = storedSetupComplete || hasRequired;
-    setIsSetupComplete(setupReady);
-    if (setupReady && !storedSetupComplete) {
-      localStorage.setItem(SETUP_COMPLETE_KEY, "true");
-    }
-  }, []);
+  const selectedInstance = useMemo(() => {
+    return instances.find((instance) => instance.id === selectedInstanceId) ?? null;
+  }, [instances, selectedInstanceId]);
+
+  const resourcesDirty = useMemo(() => {
+    const a = [...resourcesSelected].sort().join("|");
+    const b = [...resourcesSaved].sort().join("|");
+    return a !== b;
+  }, [resourcesSelected, resourcesSaved]);
 
   useEffect(() => {
-    let isMounted = true;
-    const loadTrending = async () => {
-      setTrendingStatus("loading");
-      setTrendingMessage("");
+    if (!CONTROL_PLANE_URL) return;
+
+    const loadAuth = async () => {
+      setAuthStatus("loading");
+      setAuthError(null);
       try {
-        const response = await fetch("/api/trending", { cache: "no-store" });
-        if (!response.ok) {
-          if (response.status === 429) {
-            const data = (await response.json()) as {
-              error?: string;
-              retryAfterSeconds?: number;
-            };
-            if (!isMounted) return;
-            setTrendingStatus("rate-limited");
-            setTrendingMessage(
-              data?.error ??
-              "Trending request rate limited. Try again later."
-            );
-            return;
-          }
-          throw new Error("Trending fetch failed");
+        const response = await fetch(apiUrl("/api/auth/me"), {
+          credentials: "include",
+          cache: "no-store",
+        });
+        if (response.status === 401) {
+          setAuthStatus("unauthorized");
+          return;
         }
-        const data = (await response.json()) as {
-          repos?: TrendingRepo[];
-          note?: string;
+        const payload = (await response.json()) as AuthPayload & {
+          message?: string;
         };
-        if (!isMounted) return;
-        setTrendingRepos(data.repos ?? []);
-        setTrendingStatus("ready");
-        setTrendingMessage(
-          data.note ??
-          "Trending today uses GitHub search: repos created today, sorted by stars."
-        );
-      } catch {
-        if (!isMounted) return;
-        setTrendingStatus("error");
-        setTrendingMessage("Unable to load trending repos right now.");
+        if (!response.ok) {
+          setAuthStatus("error");
+          setAuthError(payload.message ?? "Failed to load session");
+          return;
+        }
+        setAuth(payload);
+        setAuthStatus("ready");
+      } catch (error) {
+        setAuthStatus("error");
+        setAuthError((error as Error).message);
       }
     };
-    loadTrending();
-    return () => {
-      isMounted = false;
+
+    const loadInstances = async () => {
+      setInstancesLoading(true);
+      setInstancesError(null);
+      try {
+        const response = await fetch(apiUrl("/api/instances"), {
+          credentials: "include",
+          cache: "no-store",
+        });
+        const payload = (await response.json()) as {
+          instances?: InstanceSummary[];
+          message?: string;
+        };
+        if (!response.ok) {
+          setInstancesError(payload.message ?? "Unable to load instances");
+          setInstances([]);
+          return;
+        }
+        setInstances(payload.instances ?? []);
+      } catch (error) {
+        setInstancesError((error as Error).message);
+      } finally {
+        setInstancesLoading(false);
+      }
     };
+
+    void loadAuth();
+    void loadInstances();
   }, []);
 
-  const handleSetupSave = (data: {
-    apiKey: string;
-    chatUrl: string;
-    provider: LlmProvider;
-    model: string;
-  }) => {
-    setApiKey(data.apiKey);
-    localStorage.setItem(API_KEY_STORAGE, data.apiKey);
-    setProvider(data.provider);
-    localStorage.setItem(PROVIDER_KEY, data.provider);
-    setModel(data.model);
-    localStorage.setItem(MODEL_KEY, data.model);
-    setChatUrl(data.chatUrl);
-    localStorage.setItem(LAST_URL_KEY, data.chatUrl);
-    setIsSetupComplete(true);
-    localStorage.setItem(SETUP_COMPLETE_KEY, "true");
-    setIsSetupOpen(false);
+  useEffect(() => {
+    if (!instances.length) return;
+    const stored =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem(INSTANCE_STORAGE_KEY)
+        : null;
+    const storedId = stored && instances.some((item) => item.id === stored) ? stored : "";
+    const nextId = storedId || instances[0]?.id || "";
+    setSelectedInstanceId(nextId);
+  }, [instances]);
+
+  useEffect(() => {
+    if (!selectedInstanceId || typeof window === "undefined") return;
+    window.localStorage.setItem(INSTANCE_STORAGE_KEY, selectedInstanceId);
+    setMessages([]);
+    void loadFilesAndResources(selectedInstanceId);
+  }, [selectedInstanceId]);
+
+  const loadFilesAndResources = async (instanceId: string) => {
+    setFilesLoading(true);
+    setFilesError(null);
+    setResourceError(null);
+    try {
+      const [filesResponse, resourcesResponse] = await Promise.all([
+        fetch(apiUrl(`/api/instances/${instanceId}/files`), {
+          credentials: "include",
+          cache: "no-store",
+        }),
+        fetch(apiUrl(`/api/instances/${instanceId}/resources`), {
+          credentials: "include",
+          cache: "no-store",
+        }),
+      ]);
+
+      const filesPayload = (await filesResponse.json()) as {
+        files?: FileItem[];
+        message?: string;
+      };
+      if (!filesResponse.ok) {
+        setFilesError(filesPayload.message ?? "Unable to load files");
+        setFiles([]);
+      } else {
+        setFiles(filesPayload.files ?? []);
+      }
+
+      const resourcesPayload = (await resourcesResponse.json()) as {
+        selected?: string[];
+        message?: string;
+      };
+      if (!resourcesResponse.ok) {
+        setResourceError(resourcesPayload.message ?? "Unable to load resources");
+        setResourcesSelected([]);
+        setResourcesSaved([]);
+      } else {
+        const selected = uniqueList(resourcesPayload.selected ?? []);
+        setResourcesSelected(selected);
+        setResourcesSaved(selected);
+      }
+    } catch (error) {
+      setFilesError((error as Error).message);
+    } finally {
+      setFilesLoading(false);
+    }
   };
 
+  const handleSend = async (text: string) => {
+    if (!selectedInstanceId) return;
+    setChatStatus("submitted");
+    setChatError(null);
+
+    const userMessage: ChatMessage = {
+      id: newId("user"),
+      role: "user",
+      content: text,
+      createdAt: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+
+    try {
+      const response = await fetch(
+        apiUrl(`/api/instances/${selectedInstanceId}/execute`),
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ input: text }),
+        }
+      );
+      const payload = (await response.json()) as {
+        output?: string;
+        requestId?: string;
+        durationMs?: number;
+        message?: string;
+      };
+      if (!response.ok) {
+        const errorMessage = payload.message ?? "Execution failed";
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: newId("assistant"),
+            role: "assistant",
+            content: errorMessage,
+            createdAt: new Date().toISOString(),
+            meta: { isError: true },
+          },
+        ]);
+        return;
+      }
+
+      const output = typeof payload.output === "string" ? payload.output : "";
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId("assistant"),
+          role: "assistant",
+          content: output || "No output returned.",
+          createdAt: new Date().toISOString(),
+          meta: {
+            requestId: payload.requestId,
+            durationMs: payload.durationMs,
+          },
+        },
+      ]);
+    } catch (error) {
+      const message = (error as Error).message || "Execution failed";
+      setChatError(message);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: newId("assistant"),
+          role: "assistant",
+          content: message,
+          createdAt: new Date().toISOString(),
+          meta: { isError: true },
+        },
+      ]);
+    } finally {
+      setChatStatus("ready");
+    }
+  };
+
+  const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
+    if (!selectedInstanceId) return;
+    const list = event.target.files;
+    if (!list || list.length === 0) return;
+
+    setUploading(true);
+    setFilesError(null);
+    try {
+      const formData = new FormData();
+      Array.from(list).forEach((file) => formData.append("files", file));
+      const response = await fetch(
+        apiUrl(`/api/instances/${selectedInstanceId}/files`),
+        {
+          method: "POST",
+          credentials: "include",
+          body: formData,
+        }
+      );
+      const payload = (await response.json()) as { message?: string };
+      if (!response.ok) {
+        setFilesError(payload.message ?? "Upload failed");
+        return;
+      }
+      await loadFilesAndResources(selectedInstanceId);
+    } catch (error) {
+      setFilesError((error as Error).message);
+    } finally {
+      setUploading(false);
+      event.target.value = "";
+    }
+  };
+
+  const handleDeleteFile = async (fileName: string) => {
+    if (!selectedInstanceId) return;
+    setFilesError(null);
+    try {
+      const response = await fetch(
+        apiUrl(
+          `/api/instances/${selectedInstanceId}/files/${encodeURIComponent(fileName)}`
+        ),
+        {
+          method: "DELETE",
+          credentials: "include",
+        }
+      );
+      const payload = (await response.json()) as { message?: string };
+      if (!response.ok) {
+        setFilesError(payload.message ?? "Delete failed");
+        return;
+      }
+      await loadFilesAndResources(selectedInstanceId);
+    } catch (error) {
+      setFilesError((error as Error).message);
+    }
+  };
+
+  const toggleResource = (name: string) => {
+    setResourcesSelected((prev) => {
+      if (prev.includes(name)) {
+        return prev.filter((item) => item !== name);
+      }
+      return [...prev, name];
+    });
+  };
+
+  const saveResources = async () => {
+    if (!selectedInstanceId) return;
+    setResourceSaving(true);
+    setResourceError(null);
+    try {
+      const response = await fetch(
+        apiUrl(`/api/instances/${selectedInstanceId}/resources`),
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ selected: resourcesSelected }),
+        }
+      );
+      const payload = (await response.json()) as {
+        selected?: string[];
+        message?: string;
+      };
+      if (!response.ok) {
+        setResourceError(payload.message ?? "Unable to save resources");
+        return;
+      }
+      const selected = uniqueList(payload.selected ?? []);
+      setResourcesSelected(selected);
+      setResourcesSaved(selected);
+    } catch (error) {
+      setResourceError((error as Error).message);
+    } finally {
+      setResourceSaving(false);
+    }
+  };
+
+  if (!CONTROL_PLANE_URL) {
+    return (
+      <div className="min-h-screen bg-background text-zinc-100">
+        <div className="mx-auto w-full max-w-3xl px-6 py-16">
+          <div className="rounded-3xl border border-zinc-900/60 bg-zinc-950/40 p-6">
+            <div className="text-lg font-semibold">Missing configuration</div>
+            <div className="mt-2 text-sm text-zinc-400">
+              NEXT_PUBLIC_CONTROL_PLANE_URL is required to connect to the control plane.
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-background text-zinc-100">
       <header className="sticky top-0 z-20 border-b border-zinc-900/60 bg-background/80 backdrop-blur">
         <div className="mx-auto flex h-14 w-full max-w-screen-2xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
           <div className="flex min-w-0 items-center gap-3">
             <Image
               src="/logo.png"
-              alt="Chat with Files"
+              alt="ClawDeploy"
               width={1200}
               height={1200}
               className="aspect-square size-8 shrink-0 rounded-md bg-black p-1 object-contain"
             />
-
             <div className="min-w-0">
               <div className="truncate text-sm font-medium leading-tight">
-                Chat with Files
+                ClawDeploy Instance Console
               </div>
               <div className="truncate text-[11px] leading-tight text-zinc-400">
-                Chat with docs pages or GitHub repos
+                Execute messages and manage instance files
               </div>
             </div>
           </div>
-
-          <nav className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setIsSetupOpen(true)}
-              className={`rounded-xl px-3 py-2 text-xs font-medium shadow-sm transition ${isSetupComplete
-                ? "border border-zinc-900/60 text-zinc-200 hover:bg-zinc-900/40"
-                : "bg-white text-zinc-950 hover:bg-zinc-200"
-                }`}
-            >
-              Setup
-            </button>
+          <div className="flex items-center gap-3 text-xs text-zinc-400">
+            {authStatus === "ready" && auth ? (
+              <div className="hidden text-[11px] text-zinc-400 sm:block">
+                {auth.workspace.name} · {auth.user.email}
+              </div>
+            ) : null}
             <Link
-              href="https://github.com/OpenKnots/chat-with-files"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="GitHub"
-              title="GitHub"
-              className="inline-flex size-9 items-center justify-center rounded-xl border border-zinc-900/60 bg-zinc-950/30 text-zinc-200 hover:bg-zinc-900/40"
+              href={`${CONTROL_PLANE_URL}/instances`}
+              className="rounded-xl border border-zinc-900/60 px-3 py-2 text-xs font-medium text-zinc-200 hover:bg-zinc-900/40"
             >
-              <GitHubIcon className="size-5" />
+              Control plane
             </Link>
-            <Link
-              href="https://x.com/OpenKnot"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="X (Twitter)"
-              title="X (Twitter)"
-              className="inline-flex size-9 items-center justify-center rounded-xl border border-zinc-900/60 bg-zinc-950/30 text-zinc-200 hover:bg-zinc-900/40"
-            >
-              <XIcon className="size-5" />
-            </Link>
-            <Link
-              href="https://t.me/OpenKnot"
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Telegram"
-              title="Telegram"
-              className="inline-flex size-9 items-center justify-center rounded-xl border border-zinc-900/60 bg-zinc-950/30 text-zinc-200 hover:bg-zinc-900/40"
-            >
-              <TelegramIcon className="size-5" />
-            </Link>
-          </nav>
+          </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-screen-2xl px-4 pb-[calc(11rem+env(safe-area-inset-bottom))] sm:px-6 lg:px-8">
-        <div className="mx-auto w-full max-w-3xl min-w-full md:min-w-0 md:max-w-none lg:max-w-screen-2xl">
-          {!isSetupComplete ? (
-            <div className="pt-6 sm:pt-8">
-              <div className="rounded-3xl border border-amber-900/60 p-4 text-sm text-amber-200 shadow-sm">
-                <div className="font-medium">
-                  Setup required before chatting.
-                </div>
-                <div className="mt-1 text-xs text-amber-200/80">
-                  Click the Setup button to add your conversation URL, API key,
-                  and model selection.
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsSetupOpen(true)}
-                  className="mt-3 rounded-2xl bg-white px-4 py-2 text-xs font-medium text-zinc-950 shadow-sm hover:bg-zinc-200"
-                >
-                  Open setup
-                </button>
-              </div>
-            </div>
-          ) : null}
-          <ChatConversation
-            key={chatUrl || "empty"}
-            apiKey={apiKey}
-            provider={provider}
-            model={model}
-            chatUrl={chatUrl}
-            isKeyReady={isKeyReady}
-            isSetupComplete={isSetupComplete}
-          />
-        </div>
-      </main>
-      <SetupModal
-        isOpen={isSetupOpen}
-        initialApiKey={apiKey}
-        initialChatUrl={chatUrl}
-        initialProvider={provider}
-        initialModel={model}
-        docsOptions={documentationUrlOptions}
-        trendingRepos={trendingRepos}
-        trendingStatus={trendingStatus}
-        trendingMessage={trendingMessage}
-        onClose={() => setIsSetupOpen(false)}
-        onSave={handleSetupSave}
-      />
 
+      <main className="mx-auto w-full max-w-screen-2xl px-4 pb-[calc(11rem+env(safe-area-inset-bottom))] pt-6 sm:px-6 lg:px-8">
+        {authStatus === "unauthorized" ? (
+          <div className="rounded-3xl border border-amber-900/60 bg-amber-950/30 p-6 text-sm text-amber-200">
+            <div className="font-medium">Authentication required.</div>
+            <div className="mt-2 text-xs text-amber-200/80">
+              Sign in to ClawDeploy to access instance console.
+            </div>
+            <Link
+              href={`${CONTROL_PLANE_URL}/login`}
+              className="mt-4 inline-flex rounded-2xl bg-white px-4 py-2 text-xs font-medium text-zinc-950 shadow-sm hover:bg-zinc-200"
+            >
+              Sign in
+            </Link>
+          </div>
+        ) : authStatus === "error" ? (
+          <div className="rounded-3xl border border-red-900/60 bg-red-950/40 p-6 text-sm text-red-300">
+            {authError ?? "Unable to load session."}
+          </div>
+        ) : (
+          <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+            <aside className="space-y-6">
+              <div className="rounded-3xl border border-zinc-900/60 bg-zinc-950/40 p-5 shadow-sm">
+                <div className="text-sm font-semibold">Instance</div>
+                <div className="mt-3 space-y-3 text-xs text-zinc-300">
+                  {instancesLoading ? (
+                    <div>Loading instances...</div>
+                  ) : instancesError ? (
+                    <div className="text-red-300">{instancesError}</div>
+                  ) : instances.length === 0 ? (
+                    <div>
+                      No instances available. Create one in the control plane.
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <label className="text-[11px] font-medium text-zinc-400">
+                        Select instance
+                      </label>
+                      <select
+                        value={selectedInstanceId}
+                        onChange={(event) =>
+                          setSelectedInstanceId(event.target.value)
+                        }
+                        className="w-full rounded-2xl border border-zinc-900/60 bg-zinc-950/40 px-3 py-2 text-xs text-zinc-100 outline-none"
+                      >
+                        {instances.map((instance) => (
+                          <option key={instance.id} value={instance.id}>
+                            {instance.name} ({instance.effectiveStatus})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+
+                  {selectedInstance ? (
+                    <div className="space-y-2 pt-2">
+                      <div>
+                        <span className="text-zinc-500">Status:</span>{" "}
+                        {selectedInstance.effectiveStatus}
+                      </div>
+                      <div>
+                        <span className="text-zinc-500">Heartbeat:</span>{" "}
+                        {formatDate(selectedInstance.lastHeartbeatAt)}
+                      </div>
+                      <div>
+                        <span className="text-zinc-500">Region:</span>{" "}
+                        {selectedInstance.host.region}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-zinc-900/60 bg-zinc-950/40 p-5 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-semibold">Files</div>
+                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-zinc-900/60 px-3 py-1.5 text-[11px] font-medium text-zinc-200 hover:bg-zinc-900/40">
+                    <input
+                      type="file"
+                      multiple
+                      onChange={handleFileUpload}
+                      className="hidden"
+                      disabled={!selectedInstanceId || uploading}
+                    />
+                    {uploading ? "Uploading..." : "Upload"}
+                  </label>
+                </div>
+
+                <div className="mt-3 space-y-3 text-xs text-zinc-300">
+                  {filesLoading ? (
+                    <div>Loading files...</div>
+                  ) : filesError ? (
+                    <div className="text-red-300">{filesError}</div>
+                  ) : files.length === 0 ? (
+                    <div>No files uploaded yet.</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {files.map((file) => (
+                        <div
+                          key={file.name}
+                          className="flex items-start gap-2 rounded-2xl border border-zinc-900/50 bg-black/30 p-3"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={resourcesSelected.includes(file.name)}
+                            onChange={() => toggleResource(file.name)}
+                            className="mt-1"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm text-zinc-100">
+                              {file.name}
+                            </div>
+                            <div className="text-[10px] text-zinc-500">
+                              {formatBytes(file.size)} · {formatDate(file.updatedAt)}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteFile(file.name)}
+                            className="rounded-lg border border-zinc-900/60 px-2 py-1 text-[10px] text-zinc-300 hover:bg-zinc-900/40"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="pt-2">
+                    <div className="text-[11px] text-zinc-500">
+                      Knowledge base selection (checked files).
+                    </div>
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={saveResources}
+                        disabled={!resourcesDirty || resourceSaving}
+                        className="rounded-xl bg-white px-3 py-1.5 text-[11px] font-medium text-zinc-950 shadow-sm hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-400"
+                      >
+                        {resourceSaving ? "Saving..." : "Save selection"}
+                      </button>
+                      {resourceError ? (
+                        <span className="text-[11px] text-red-300">
+                          {resourceError}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </aside>
+
+            <section className="flex min-h-[70vh] flex-col rounded-3xl border border-zinc-900/60 bg-zinc-950/30 p-5 shadow-sm">
+              <div className="flex-1 space-y-4 overflow-y-auto pb-4">
+                {messages.length === 0 ? (
+                  <div className="rounded-3xl border border-zinc-900/60 p-4 text-sm text-zinc-400">
+                    Send a message to the selected instance.
+                  </div>
+                ) : (
+                  messages.map((message) => {
+                    const isUser = message.role === "user";
+                    return (
+                      <div
+                        key={message.id}
+                        className={`flex w-full gap-3 ${isUser ? "justify-end" : ""}`}
+                      >
+                        {!isUser && (
+                          <Image
+                            src="/logo.png"
+                            alt="ClawDeploy"
+                            width={32}
+                            height={32}
+                            className="mt-0.5 hidden size-8 shrink-0 rounded-full border border-zinc-900/60 bg-black p-1 object-contain shadow-sm sm:block"
+                          />
+                        )}
+                        <div
+                          className={`w-full ${isUser ? "max-w-[92%] sm:max-w-[80%]" : "max-w-full"}`}
+                        >
+                          <div
+                            className={`rounded-3xl px-4 py-3 shadow-sm ${
+                              message.meta?.isError
+                                ? "border border-red-900/60 text-red-200"
+                                : "border border-zinc-900/60 text-zinc-100"
+                            } ${isUser ? "ml-auto" : ""}`}
+                          >
+                            <MarkdownMessage
+                              content={message.content}
+                              isAnimating={false}
+                            />
+                            {message.meta?.requestId ? (
+                              <div className="mt-2 text-[10px] text-zinc-500">
+                                Request {message.meta.requestId} · {message.meta.durationMs ?? "-"} ms
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                {chatError ? (
+                  <div className="text-xs text-red-300">{chatError}</div>
+                ) : null}
+              </div>
+
+              <div className="border-t border-zinc-900/60 pt-4">
+                <ChatInput
+                  status={chatStatus}
+                  onSubmit={handleSend}
+                  inputDisabled={!selectedInstanceId || authStatus !== "ready"}
+                  placeholder={
+                    selectedInstanceId
+                      ? "Send a message to the instance..."
+                      : "Select an instance to start..."
+                  }
+                />
+              </div>
+            </section>
+          </div>
+        )}
+      </main>
     </div>
   );
 }

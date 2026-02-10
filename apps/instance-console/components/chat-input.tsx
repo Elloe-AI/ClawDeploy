@@ -74,8 +74,8 @@ export default function ChatInput({
           rows={1}
           className="w-full resize-none bg-transparent border border-zinc-900/60 bg-zinc-950/30 px-3 py-2 text-sm leading-relaxed text-zinc-100 rounded-xl shadow-sm outline-none placeholder:text-zinc-500 disabled:opacity-60"
           placeholder={
-            placeholder ??
-            "Ask Chat Assistant anything about your docs or GitHub repository…"
+          placeholder ??
+            "Send a message to the instance..."
           }
           disabled={disabled}
           value={text}
