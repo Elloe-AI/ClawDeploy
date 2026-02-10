@@ -23,6 +23,8 @@ if ! command -v docker >/dev/null 2>&1; then
   systemctl enable --now docker
 fi
 
+mkdir -p /var/lib/clawdeploy/instances
+
 if command -v ufw >/dev/null 2>&1; then
   ufw allow OpenSSH
   ufw allow 8081/tcp

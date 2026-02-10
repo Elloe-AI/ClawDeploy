@@ -1,7 +1,9 @@
 import express from "express";
 import { z } from "zod";
 import { execFile } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -35,6 +37,10 @@ function docker(args: string[]): Promise<string> {
 
 function containerName(instanceId: string) {
   return `clawdeploy-runner-${instanceId}`;
+}
+
+function instanceFilesDir(instanceId: string) {
+  return path.join("/var/lib/clawdeploy/instances", instanceId, "files");
 }
 
 async function isPortFree(portNumber: number): Promise<boolean> {
@@ -115,6 +121,9 @@ app.post("/v1/runners", requireAuth, async (req, res) => {
   const name = containerName(instanceId);
 
   try {
+    const filesDir = instanceFilesDir(instanceId);
+    await fs.promises.mkdir(filesDir, { recursive: true });
+
     const existingId = await getContainerId(name);
     if (existingId) {
       const portNumber = await getContainerPort(name);
@@ -165,6 +174,8 @@ app.post("/v1/runners", requireAuth, async (req, res) => {
       "clawdeploy.runner=true",
       "--label",
       `clawdeploy.instanceId=${instanceId}`,
+      "-v",
+      `${filesDir}:${filesDir}`,
       "-e",
       `CONTROL_PLANE_URL=${controlPlaneUrl}`,
       "-e",
@@ -173,6 +184,8 @@ app.post("/v1/runners", requireAuth, async (req, res) => {
       `RUNNER_SECRET=${runnerSecret}`,
       "-e",
       `HOST_AGENT_SHARED_SECRET=${sharedSecret}`,
+      "-e",
+      `FILES_DIR=${filesDir}`,
       "-e",
       `CLAWDEPLOY_MODE=${process.env.CLAWDEPLOY_MODE ?? "true"}`,
       ...extraEnv,
