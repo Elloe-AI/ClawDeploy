@@ -2,7 +2,7 @@ import { getSessionFromCookies } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
 import { getStripe } from "@/lib/stripe";
-import { requireEnv } from "@/lib/config";
+import { getControlPlaneUrl } from "@/lib/config";
 
 export async function POST() {
   try {
@@ -18,8 +18,13 @@ export async function POST() {
     }
 
     const stripe = getStripe();
-    const priceId = requireEnv("STRIPE_PRICE_ID");
-    const baseUrl = requireEnv("BASE_URL").replace(/\/$/, "");
+    const baseUrl = getControlPlaneUrl();
+    const prices = await stripe.prices.list({ active: true, limit: 10 });
+    const recurringPrice = prices.data.find((price) => price.type === "recurring");
+    if (!recurringPrice) {
+      return jsonError("billing_error", "No active recurring Stripe price found", 500);
+    }
+    const priceId = recurringPrice.id;
 
     let customerId = workspace.stripeCustomerId;
     if (!customerId) {

@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
 import { getEffectiveStatus } from "@/lib/instances";
 
+const HEARTBEAT_TIMEOUT_MS = 90_000;
+
 export async function GET(_request: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSessionFromCookies();
   if (!session) {
@@ -24,7 +26,7 @@ export async function GET(_request: NextRequest, { params }: { params: { id: str
     take: 20
   });
 
-  const heartbeatTimeoutMs = Number(process.env.RUNNER_HEARTBEAT_TIMEOUT_MS ?? "90000");
+  const heartbeatTimeoutMs = HEARTBEAT_TIMEOUT_MS;
 
   return jsonOk({
     instance: {

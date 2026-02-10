@@ -1,14 +1,14 @@
-import { requireEnv } from "@/lib/config";
+import { getControlPlaneUrl } from "@/lib/config";
 
-const telegramApiBase = () => process.env.TELEGRAM_API_BASE_URL ?? "https://api.telegram.org";
+const telegramApiBase = "https://api.telegram.org";
 
 export async function setTelegramWebhook(options: {
   botToken: string;
   secretToken: string;
 }) {
-  const baseUrl = process.env.TELEGRAM_WEBHOOK_BASE_URL ?? requireEnv("BASE_URL");
-  const url = `${baseUrl.replace(/\/$/, "")}/api/webhooks/telegram`;
-  const response = await fetch(`${telegramApiBase()}/bot${options.botToken}/setWebhook`, {
+  const baseUrl = getControlPlaneUrl();
+  const url = `${baseUrl}/api/webhooks/telegram`;
+  const response = await fetch(`${telegramApiBase}/bot${options.botToken}/setWebhook`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -30,7 +30,7 @@ export async function sendTelegramMessage(options: {
   chatId: string;
   text: string;
 }) {
-  const response = await fetch(`${telegramApiBase()}/bot${options.botToken}/sendMessage`, {
+  const response = await fetch(`${telegramApiBase}/bot${options.botToken}/sendMessage`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({

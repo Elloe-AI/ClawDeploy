@@ -12,6 +12,9 @@ const schema = z.object({
   input: z.string().min(1).max(4000)
 });
 
+const HEARTBEAT_TIMEOUT_MS = 90_000;
+const MAX_EXECUTION_TIME_MS = 300_000;
+
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSessionFromCookies();
   if (!session) {
@@ -56,7 +59,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     });
   }
 
-  const heartbeatTimeoutMs = Number(process.env.RUNNER_HEARTBEAT_TIMEOUT_MS ?? "90000");
+  const heartbeatTimeoutMs = HEARTBEAT_TIMEOUT_MS;
   if (isHeartbeatStale(instance.lastHeartbeatAt, heartbeatTimeoutMs)) {
     return jsonError("runner_unhealthy", "Runner heartbeat is stale", 503);
   }
@@ -65,7 +68,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
     return jsonError("runner_missing", "Runner is not registered", 503);
   }
 
-  const timeoutMs = Number(process.env.MAX_EXECUTION_TIME_MS ?? "300000");
+  const timeoutMs = MAX_EXECUTION_TIME_MS;
 
   try {
     const result = await executeRunner({

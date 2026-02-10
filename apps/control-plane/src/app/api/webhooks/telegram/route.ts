@@ -9,6 +9,9 @@ import { isBillingActive } from "@/lib/billing";
 import { isHeartbeatStale } from "@/lib/instances";
 import type { TelegramWebhookUpdate } from "@clawdeploy/shared-types";
 
+const HEARTBEAT_TIMEOUT_MS = 90_000;
+const MAX_EXECUTION_TIME_MS = 300_000;
+
 export async function POST(request: NextRequest) {
   const payload = (await request.json().catch(() => null)) as TelegramWebhookUpdate | null;
   if (!payload || !payload.message || !payload.message.chat) {
@@ -53,7 +56,7 @@ export async function POST(request: NextRequest) {
     return jsonError("instance_not_ready", "Instance is not running", 409);
   }
 
-  const heartbeatTimeoutMs = Number(process.env.RUNNER_HEARTBEAT_TIMEOUT_MS ?? "90000");
+  const heartbeatTimeoutMs = HEARTBEAT_TIMEOUT_MS;
   if (isHeartbeatStale(instance.lastHeartbeatAt, heartbeatTimeoutMs)) {
     return jsonError("runner_unhealthy", "Runner heartbeat is stale", 503);
   }
@@ -81,7 +84,7 @@ export async function POST(request: NextRequest) {
   });
 
   try {
-    const timeoutMs = Number(process.env.MAX_EXECUTION_TIME_MS ?? "300000");
+    const timeoutMs = MAX_EXECUTION_TIME_MS;
     const result = await executeRunner({
       hostBaseUrl: instance.host.baseUrl,
       runnerId: instance.runnerId,

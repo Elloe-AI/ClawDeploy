@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-}"
-AGENT_ID="${AGENT_ID:-}"
-AGENT_SHARED_SECRET="${AGENT_SHARED_SECRET:-}"
-RUNNER_IMAGE="${RUNNER_IMAGE:-}"
-
-if [[ -z "$CONTROL_PLANE_URL" || -z "$AGENT_ID" || -z "$AGENT_SHARED_SECRET" || -z "$RUNNER_IMAGE" ]]; then
-  echo "CONTROL_PLANE_URL, AGENT_ID, AGENT_SHARED_SECRET, and RUNNER_IMAGE must be set" >&2
-  exit 1
-fi
-
 if ! command -v docker >/dev/null 2>&1; then
   apt-get update -y
   apt-get install -y ca-certificates curl gnupg lsb-release
@@ -31,4 +21,4 @@ if command -v ufw >/dev/null 2>&1; then
   ufw --force enable
 fi
 
-echo "Host bootstrapped with Docker. Configure the host agent with AGENT_ID=$AGENT_ID and CONTROL_PLANE_URL=$CONTROL_PLANE_URL."
+echo "Host bootstrapped with Docker. Configure and start the host agent."

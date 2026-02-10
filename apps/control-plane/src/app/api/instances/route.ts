@@ -14,13 +14,18 @@ const createSchema = z.object({
   name: z.string().min(2).max(64).optional()
 });
 
+const HEARTBEAT_TIMEOUT_MS = 90_000;
+const DEFAULT_RUNNER_CPU = 1;
+const DEFAULT_RUNNER_MEMORY_MB = 1024;
+const RUNNER_IMAGE = "clawdeploy-runner:dev";
+
 export async function GET() {
   const session = await getSessionFromCookies();
   if (!session) {
     return jsonError("unauthorized", "Authentication required", 401);
   }
 
-  const heartbeatTimeoutMs = Number(process.env.RUNNER_HEARTBEAT_TIMEOUT_MS ?? "90000");
+  const heartbeatTimeoutMs = HEARTBEAT_TIMEOUT_MS;
   const instances = await prisma.instance.findMany({
     where: { workspaceId: session.workspaceId },
     include: {
@@ -86,8 +91,8 @@ export async function POST(request: NextRequest) {
     return jsonError("no_capacity", "No active hosts available", 503);
   }
 
-  const cpuLimit = Number(process.env.DEFAULT_RUNNER_CPU_LIMIT ?? "1");
-  const memoryLimitMb = Number(process.env.DEFAULT_RUNNER_MEMORY_LIMIT_MB ?? "1024");
+  const cpuLimit = DEFAULT_RUNNER_CPU;
+  const memoryLimitMb = DEFAULT_RUNNER_MEMORY_MB;
   if (host.usedCpu + cpuLimit > host.capacityCpu || host.usedMemoryMb + memoryLimitMb > host.capacityMemoryMb) {
     return jsonError("no_capacity", "Host capacity exhausted", 503);
   }
@@ -121,7 +126,7 @@ export async function POST(request: NextRequest) {
   try {
     const provisioned = await provisionRunnerScript({
       instanceId: instance.id,
-      runnerImage: process.env.RUNNER_IMAGE ?? "clawdeploy-runner:dev",
+      runnerImage: RUNNER_IMAGE,
       cpuLimit,
       memoryLimitMb,
       runnerSecret,

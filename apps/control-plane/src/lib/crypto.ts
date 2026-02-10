@@ -1,12 +1,12 @@
 import { decryptString, encryptString, hashSecret, verifySecret } from "@clawdeploy/crypto-utils";
-import { requireEnv } from "@/lib/config";
+import { deriveSecret } from "@/lib/config";
 
 export function encryptToken(token: string): string {
-  return encryptString(token, requireEnv("DATA_ENCRYPTION_KEY"));
+  return encryptString(token, deriveSecret("data-encryption", "base64"));
 }
 
 export function decryptToken(payload: string): string {
-  return decryptString(payload, requireEnv("DATA_ENCRYPTION_KEY"));
+  return decryptString(payload, deriveSecret("data-encryption", "base64"));
 }
 
 export function hashRunnerSecret(secret: string): { hash: string; salt: string } {

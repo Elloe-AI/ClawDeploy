@@ -1,4 +1,4 @@
-import { requireEnv } from "@/lib/config";
+import { deriveSecret } from "@/lib/config";
 import { logError } from "@/lib/logger";
 
 export type ProvisionRunnerResult = {
@@ -13,7 +13,7 @@ export type RunnerMessage = {
   metadata?: Record<string, unknown>;
 };
 
-const agentSecret = () => requireEnv("HOST_AGENT_SHARED_SECRET");
+const agentSecret = () => deriveSecret("host-agent");
 
 export async function provisionRunner(options: {
   hostBaseUrl: string;

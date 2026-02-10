@@ -3,7 +3,6 @@ import type Stripe from "stripe";
 import { prisma } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
 import { getStripe } from "@/lib/stripe";
-import { requireEnv } from "@/lib/config";
 
 function mapStatus(status: string): "trialing" | "active" | "past_due" | "canceled" | "incomplete" {
   switch (status) {
@@ -23,15 +22,15 @@ function mapStatus(status: string): "trialing" | "active" | "past_due" | "cancel
 export async function POST(request: NextRequest) {
   try {
     const stripe = getStripe();
-    const signature = request.headers.get("stripe-signature");
-    if (!signature) {
-      return jsonError("bad_request", "Missing Stripe signature", 400);
-    }
 
     const body = await request.text();
     let event: Stripe.Event;
     try {
-      event = stripe.webhooks.constructEvent(body, signature, requireEnv("STRIPE_WEBHOOK_SECRET"));
+      const parsed = JSON.parse(body) as { id?: string };
+      if (!parsed?.id) {
+        return jsonError("bad_request", "Missing Stripe event id", 400);
+      }
+      event = await stripe.events.retrieve(parsed.id);
     } catch (error) {
       return jsonError("bad_request", (error as Error).message, 400);
     }

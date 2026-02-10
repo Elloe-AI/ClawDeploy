@@ -21,27 +21,22 @@ Runners do not talk directly to messaging platforms.
 ## Environment variables
 
 ```env
-NODE_ENV=development
-PORT=8082
-CONTROL_PLANE_URL=http://localhost:3000
 INSTANCE_ID=
 RUNNER_SECRET=
-HOST_AGENT_SHARED_SECRET=local-agent-shared-secret
-CLAWDEPLOY_MODE=true
-OPENCLAW_BIN=/usr/local/bin/openclaw
-OPENCLAW_ARGS=
-MAX_EXECUTION_TIME_MS=300000
-MAX_MESSAGES_PER_MIN=60
-MAX_CONCURRENCY=1
-LOG_LEVEL=info
+OPENAI_API_KEY=
+FILES_DIR=/var/lib/clawdeploy/instances/local/files
 ```
 
 ## Resource limits and safety constraints
 
-- max execution time enforced by `MAX_EXECUTION_TIME_MS`
-- per-minute request cap enforced by `MAX_MESSAGES_PER_MIN`
-- concurrency bounded by `MAX_CONCURRENCY`
+- max execution time, message rate, and concurrency are configured via the runner config file
 - container limits enforced by Docker cgroups
+
+Runner config file:
+
+- located at the parent directory of `FILES_DIR` as `runner.json`
+- written by the host agent when provisioning the container
+- includes `controlPlaneUrl`, `hostAgentSharedSecret`, `openclawBin`, `openclawArgs`, and limit settings
 
 ## Run locally via Docker
 
@@ -49,11 +44,10 @@ LOG_LEVEL=info
 docker build -f infra/docker/Dockerfile.runner -t clawdeploy-runner:dev .
 
 docker run --rm \
-  -e CONTROL_PLANE_URL=http://localhost:3000 \
   -e INSTANCE_ID=$INSTANCE_ID \
   -e RUNNER_SECRET=$RUNNER_SECRET \
-  -e HOST_AGENT_SHARED_SECRET=local-agent-shared-secret \
-  -e OPENCLAW_BIN=/usr/local/bin/openclaw \
+  -e OPENAI_API_KEY=$OPENAI_API_KEY \
+  -e FILES_DIR=/var/lib/clawdeploy/instances/local/files \
   -p 8082:8082 \
   clawdeploy-runner:dev
 ```

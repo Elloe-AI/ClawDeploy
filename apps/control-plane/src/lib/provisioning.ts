@@ -1,14 +1,12 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
-import { requireEnv } from "@/lib/config";
+import { deriveSecret, getControlPlaneUrl } from "@/lib/config";
 
 function repoRoot() {
   return path.resolve(process.cwd(), "..", "..");
 }
 
-function resolveScript(defaultName: string, overrideEnv?: string) {
-  const override = overrideEnv ? process.env[overrideEnv] : undefined;
-  if (override) return override;
+function resolveScript(defaultName: string) {
   return path.join(repoRoot(), "infra", "scripts", defaultName);
 }
 
@@ -25,9 +23,6 @@ async function runScript(command: string, args: string[]) {
 }
 
 function bashCommand(): string {
-  if (process.platform === "win32") {
-    return process.env.BASH_PATH ?? "bash";
-  }
   return "bash";
 }
 
@@ -39,7 +34,7 @@ export async function provisionRunnerScript(options: {
   runnerSecret: string;
   hostAgentUrl: string;
 }) {
-  const scriptPath = resolveScript("provision-runner.sh", "PROVISION_SCRIPT_PATH");
+  const scriptPath = resolveScript("provision-runner.sh");
   const output = await runScript(bashCommand(), [
     scriptPath,
     "--id",
@@ -53,9 +48,9 @@ export async function provisionRunnerScript(options: {
     "--host-agent-url",
     options.hostAgentUrl,
     "--shared-secret",
-    requireEnv("HOST_AGENT_SHARED_SECRET"),
+    deriveSecret("host-agent"),
     "--control-plane-url",
-    process.env.RUNNER_CONTROL_PLANE_URL ?? requireEnv("BASE_URL"),
+    getControlPlaneUrl(),
     "--runner-secret",
     options.runnerSecret
   ]);
@@ -63,7 +58,7 @@ export async function provisionRunnerScript(options: {
 }
 
 export async function stopRunnerScript(options: { runnerId: string; hostAgentUrl: string }) {
-  const scriptPath = resolveScript("stop-runner.sh", "STOP_SCRIPT_PATH");
+  const scriptPath = resolveScript("stop-runner.sh");
   await runScript(bashCommand(), [
     scriptPath,
     "--id",
@@ -71,6 +66,6 @@ export async function stopRunnerScript(options: { runnerId: string; hostAgentUrl
     "--host-agent-url",
     options.hostAgentUrl,
     "--shared-secret",
-    requireEnv("HOST_AGENT_SHARED_SECRET")
+    deriveSecret("host-agent")
   ]);
 }

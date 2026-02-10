@@ -3,17 +3,53 @@ import { z } from "zod";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import path from "node:path";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-const port = Number(process.env.PORT ?? "8082");
-const controlPlaneUrl = process.env.CONTROL_PLANE_URL;
+const port = 8082;
 const instanceId = process.env.INSTANCE_ID;
 const runnerSecret = process.env.RUNNER_SECRET;
-const hostAgentSecret = process.env.HOST_AGENT_SHARED_SECRET;
-const openclawBin = process.env.OPENCLAW_BIN ?? "";
-const clawDeployMode = (process.env.CLAWDEPLOY_MODE ?? "true").toLowerCase() === "true";
+const filesDir = process.env.FILES_DIR;
+
+const configSchema = z.object({
+  controlPlaneUrl: z.string().url(),
+  hostAgentSharedSecret: z.string().min(16),
+  openclawBin: z.string().min(1).optional(),
+  openclawArgs: z.array(z.string()).optional(),
+  maxExecutionMs: z.number().int().positive().optional(),
+  maxMessagesPerMin: z.number().int().positive().optional(),
+  maxConcurrency: z.number().int().positive().optional()
+});
+
+type RunnerConfig = z.infer<typeof configSchema>;
+
+function loadRunnerConfig(baseFilesDir: string): RunnerConfig {
+  const instanceRoot = path.dirname(baseFilesDir);
+  const configPath = path.join(instanceRoot, "runner.json");
+  if (!fs.existsSync(configPath)) {
+    throw new Error(`Runner config missing at ${configPath}`);
+  }
+  const raw = fs.readFileSync(configPath, "utf8");
+  const parsed = JSON.parse(raw);
+  const result = configSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("Runner config is invalid");
+  }
+  return result.data;
+}
+
+if (!instanceId || !runnerSecret || !filesDir) {
+  throw new Error("INSTANCE_ID, RUNNER_SECRET, and FILES_DIR are required");
+}
+
+const runnerConfig = loadRunnerConfig(filesDir);
+const controlPlaneUrl = runnerConfig.controlPlaneUrl.replace(/\/$/, "");
+const hostAgentSecret = runnerConfig.hostAgentSharedSecret;
+const openclawBin = runnerConfig.openclawBin ?? "openclaw";
+const openclawArgs = runnerConfig.openclawArgs ?? [];
+const clawDeployMode = true;
 
 if (clawDeployMode) {
   // OpenClaw Telegram hooks (vendor/openclaw-chat-api) rely on TELEGRAM_* env vars. Strip them in ClawDeploy mode.
@@ -24,13 +60,9 @@ if (clawDeployMode) {
   }
 }
 
-if (!controlPlaneUrl || !instanceId || !runnerSecret || !hostAgentSecret) {
-  throw new Error("CONTROL_PLANE_URL, INSTANCE_ID, RUNNER_SECRET, and HOST_AGENT_SHARED_SECRET are required");
-}
-
-const maxExecutionMs = Number(process.env.MAX_EXECUTION_TIME_MS ?? "300000");
-const maxMessagesPerMin = Number(process.env.MAX_MESSAGES_PER_MIN ?? "60");
-const maxConcurrency = Number(process.env.MAX_CONCURRENCY ?? "1");
+const maxExecutionMs = runnerConfig.maxExecutionMs ?? 300000;
+const maxMessagesPerMin = runnerConfig.maxMessagesPerMin ?? 60;
+const maxConcurrency = runnerConfig.maxConcurrency ?? 1;
 
 let activeRequests = 0;
 const recentRequests: number[] = [];
@@ -47,21 +79,6 @@ function pruneRequests() {
   }
 }
 
-function getOpenClawArgs() {
-  const raw = process.env.OPENCLAW_ARGS;
-  if (!raw) return [];
-  if (raw.trim().startsWith("[")) {
-    try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        return parsed.map(String);
-      }
-    } catch {
-      return [];
-    }
-  }
-  return raw.split(" ").filter((part) => part.length > 0);
-}
 
 // OpenClaw emits structured output. Normalize to a consistent message shape for the control plane.
 type StructuredMessage = {
@@ -215,7 +232,7 @@ app.post("/execute", async (req, res) => {
   }
 
   if (!openclawBin) {
-    res.status(500).json({ error: "openclaw_missing", message: "OPENCLAW_BIN is not configured" });
+    res.status(500).json({ error: "openclaw_missing", message: "OpenClaw binary is not configured" });
     return;
   }
 
@@ -228,7 +245,7 @@ app.post("/execute", async (req, res) => {
 
   const requestId = crypto.randomUUID();
   const timeoutMs = Math.min(parsed.data.timeoutMs ?? maxExecutionMs, maxExecutionMs);
-  const args = getOpenClawArgs();
+  const args = openclawArgs;
   const startedAt = Date.now();
   let responded = false;
   let timedOut = false;

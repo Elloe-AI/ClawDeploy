@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
-import { requireEnv } from "@/lib/config";
+import { deriveSecretBytes } from "@/lib/config";
 
 const cookieName = "cd_session";
 
@@ -10,7 +10,7 @@ export type SessionPayload = {
   email: string;
 };
 
-const secret = () => new TextEncoder().encode(requireEnv("SESSION_SECRET"));
+const secret = () => deriveSecretBytes("session");
 
 export async function createSessionToken(payload: SessionPayload): Promise<string> {
   return new SignJWT(payload)

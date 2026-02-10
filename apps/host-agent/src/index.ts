@@ -1,6 +1,7 @@
 import express from "express";
 import { z } from "zod";
 import { execFile } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -9,10 +10,11 @@ const app = express();
 app.use(express.json({ limit: "1mb" }));
 
 const port = Number(process.env.PORT ?? "8081");
-const sharedSecret = process.env.AGENT_SHARED_SECRET;
-if (!sharedSecret) {
-  throw new Error("AGENT_SHARED_SECRET is required");
+const stripeSecret = process.env.STRIPE_SECRET_KEY;
+if (!stripeSecret) {
+  throw new Error("STRIPE_SECRET_KEY is required");
 }
+const sharedSecret = crypto.createHash("sha256").update(`host-agent:${stripeSecret}`).digest("hex");
 
 function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const secret = req.header("x-clawdeploy-agent-secret");
@@ -41,6 +43,71 @@ function containerName(instanceId: string) {
 
 function instanceFilesDir(instanceId: string) {
   return path.join("/var/lib/clawdeploy/instances", instanceId, "files");
+}
+
+function runnerConfigPath(filesDir: string) {
+  const instanceRoot = path.dirname(filesDir);
+  return path.join(instanceRoot, "runner.json");
+}
+
+function parseOpenClawArgs(raw?: string): string[] | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) {
+        return parsed.map(String);
+      }
+    } catch {
+      return undefined;
+    }
+  }
+  return trimmed.split(" ").filter((part) => part.length > 0);
+}
+
+async function writeRunnerConfig(filesDir: string, controlPlaneUrl: string) {
+  const config: {
+    controlPlaneUrl: string;
+    hostAgentSharedSecret: string;
+    openclawBin?: string;
+    openclawArgs?: string[];
+    maxExecutionMs?: number;
+    maxMessagesPerMin?: number;
+    maxConcurrency?: number;
+  } = {
+    controlPlaneUrl,
+    hostAgentSharedSecret: sharedSecret
+  };
+
+  if (process.env.RUNNER_OPENCLAW_BIN) {
+    config.openclawBin = process.env.RUNNER_OPENCLAW_BIN;
+  }
+
+  const parsedArgs = parseOpenClawArgs(process.env.RUNNER_OPENCLAW_ARGS);
+  if (parsedArgs && parsedArgs.length > 0) {
+    config.openclawArgs = parsedArgs;
+  }
+
+  const maxExecutionMs = Number(process.env.RUNNER_MAX_EXECUTION_TIME_MS);
+  if (Number.isFinite(maxExecutionMs) && maxExecutionMs > 0) {
+    config.maxExecutionMs = maxExecutionMs;
+  }
+
+  const maxMessagesPerMin = Number(process.env.RUNNER_MAX_MESSAGES_PER_MIN);
+  if (Number.isFinite(maxMessagesPerMin) && maxMessagesPerMin > 0) {
+    config.maxMessagesPerMin = maxMessagesPerMin;
+  }
+
+  const maxConcurrency = Number(process.env.RUNNER_MAX_CONCURRENCY);
+  if (Number.isFinite(maxConcurrency) && maxConcurrency > 0) {
+    config.maxConcurrency = maxConcurrency;
+  }
+
+  const configPath = runnerConfigPath(filesDir);
+  await fs.promises.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.promises.writeFile(configPath, JSON.stringify(config, null, 2));
 }
 
 async function isPortFree(portNumber: number): Promise<boolean> {
@@ -123,6 +190,7 @@ app.post("/v1/runners", requireAuth, async (req, res) => {
   try {
     const filesDir = instanceFilesDir(instanceId);
     await fs.promises.mkdir(filesDir, { recursive: true });
+    await writeRunnerConfig(filesDir, controlPlaneUrl);
 
     const existingId = await getContainerId(name);
     if (existingId) {
@@ -141,20 +209,8 @@ app.post("/v1/runners", requireAuth, async (req, res) => {
     const portNumber = await allocatePort(portStart, portEnd);
 
     const extraEnv: string[] = [];
-    if (process.env.RUNNER_MAX_EXECUTION_TIME_MS) {
-      extraEnv.push("-e", `MAX_EXECUTION_TIME_MS=${process.env.RUNNER_MAX_EXECUTION_TIME_MS}`);
-    }
-    if (process.env.RUNNER_MAX_MESSAGES_PER_MIN) {
-      extraEnv.push("-e", `MAX_MESSAGES_PER_MIN=${process.env.RUNNER_MAX_MESSAGES_PER_MIN}`);
-    }
-    if (process.env.RUNNER_MAX_CONCURRENCY) {
-      extraEnv.push("-e", `MAX_CONCURRENCY=${process.env.RUNNER_MAX_CONCURRENCY}`);
-    }
-    if (process.env.RUNNER_OPENCLAW_BIN) {
-      extraEnv.push("-e", `OPENCLAW_BIN=${process.env.RUNNER_OPENCLAW_BIN}`);
-    }
-    if (process.env.RUNNER_OPENCLAW_ARGS) {
-      extraEnv.push("-e", `OPENCLAW_ARGS=${process.env.RUNNER_OPENCLAW_ARGS}`);
+    if (process.env.OPENAI_API_KEY) {
+      extraEnv.push("-e", `OPENAI_API_KEY=${process.env.OPENAI_API_KEY}`);
     }
 
     await docker([
@@ -177,17 +233,11 @@ app.post("/v1/runners", requireAuth, async (req, res) => {
       "-v",
       `${filesDir}:${filesDir}`,
       "-e",
-      `CONTROL_PLANE_URL=${controlPlaneUrl}`,
-      "-e",
       `INSTANCE_ID=${instanceId}`,
       "-e",
       `RUNNER_SECRET=${runnerSecret}`,
       "-e",
-      `HOST_AGENT_SHARED_SECRET=${sharedSecret}`,
-      "-e",
       `FILES_DIR=${filesDir}`,
-      "-e",
-      `CLAWDEPLOY_MODE=${process.env.CLAWDEPLOY_MODE ?? "true"}`,
       ...extraEnv,
       runnerImage
     ]);
