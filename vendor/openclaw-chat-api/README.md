@@ -1,4 +1,4 @@
 # openclaw-chat-api (vendored)
 
-This directory contains vendored OpenClaw helper logic for ClawDeploy.
-It is used as internal library code only and does not run as a standalone service.
+This directory is reserved for vendored OpenClaw helper logic.
+ClawDeploy executes OpenClaw via the runner binary and does not load runtime code from this directory.

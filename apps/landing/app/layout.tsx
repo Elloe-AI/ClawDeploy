@@ -9,12 +9,12 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 
 export const metadata: Metadata = {
   title: "ClawDeploy",
-  description: "Managed deployment and control plane for OpenClaw runners.",
-  keywords: ["OpenClaw", "deployment", "runner", "control plane", "Telegram"],
+  description: "Control plane and runner infrastructure for OpenClaw deployment.",
+  keywords: ["ClawDeploy", "OpenClaw", "control plane", "runner", "Telegram", "DigitalOcean"],
   authors: [{ name: "ClawDeploy" }],
   openGraph: {
     title: "ClawDeploy",
-    description: "Managed deployment and control plane for OpenClaw runners.",
+    description: "Control plane and runner infrastructure for OpenClaw deployment.",
     type: "website"
   }
 }

@@ -32,7 +32,7 @@ clawdeploy/
 │   ├── instance-console/   # Instance console UI
 │   └── landing/            # Marketing site
 ├── vendor/
-│   ├── openclaw-chat-api/  # Vendored OpenClaw logic
+│   ├── openclaw-chat-api/  # Vendored OpenClaw reference
 │   └── openclaw-extension/ # Unused
 ├── infra/
 │   ├── docker/             # Dockerfiles and compose

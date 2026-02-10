@@ -52,7 +52,7 @@ const openclawArgs = runnerConfig.openclawArgs ?? [];
 const clawDeployMode = true;
 
 if (clawDeployMode) {
-  // OpenClaw Telegram hooks (vendor/openclaw-chat-api) rely on TELEGRAM_* env vars. Strip them in ClawDeploy mode.
+  // OpenClaw Telegram hooks rely on TELEGRAM_* env vars. Strip them in ClawDeploy mode.
   for (const key of Object.keys(process.env)) {
     if (key.startsWith("TELEGRAM_")) {
       delete process.env[key];
@@ -144,7 +144,7 @@ function normalizeOpenClawOutput(stdout: string, stderr: string): StructuredMess
 function buildOpenClawEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   if (clawDeployMode) {
-    // OpenClaw Telegram hooks (vendor/openclaw-chat-api) read TELEGRAM_* env vars. Strip them in ClawDeploy mode.
+    // OpenClaw Telegram hooks read TELEGRAM_* env vars. Strip them in ClawDeploy mode.
     for (const key of Object.keys(env)) {
       if (key.startsWith("TELEGRAM_")) {
         delete env[key];
@@ -202,10 +202,6 @@ setInterval(() => {
     console.error(JSON.stringify({ level: "error", event: "runner.heartbeat_failed", message: (error as Error).message }));
   });
 }, 30_000);
-
-app.get("/health", (_req, res) => {
-  res.json({ status: "healthy", instanceId, uptime: process.uptime() });
-});
 
 app.post("/execute", async (req, res) => {
   const secret = req.header("x-host-agent-secret");

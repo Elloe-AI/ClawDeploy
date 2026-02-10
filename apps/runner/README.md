@@ -55,4 +55,3 @@ docker run --rm \
 ## API endpoints
 
 - `POST /execute` Execute input from the host agent
-- `GET /health` Health check

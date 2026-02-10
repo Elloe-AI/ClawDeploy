@@ -7,6 +7,7 @@ export default function HomePage() {
         <div className="absolute -top-32 left-[-10%] h-[420px] w-[420px] rounded-full bg-[radial-gradient(circle_at_center,_rgba(15,76,129,0.35),_transparent_70%)] blur-3xl" />
         <div className="absolute top-16 right-[-5%] h-[360px] w-[360px] rounded-full bg-[radial-gradient(circle_at_center,_rgba(56,189,248,0.35),_transparent_70%)] blur-3xl" />
       </div>
+
       <header className="border-b border-border/60">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
           <div className="flex items-center gap-3">
@@ -16,10 +17,19 @@ export default function HomePage() {
             <div className="text-sm font-semibold">ClawDeploy</div>
           </div>
           <nav className="flex items-center gap-4 text-xs text-muted-foreground">
-            <Link href="#architecture" className="hover:text-foreground">Architecture</Link>
-            <Link href="#workflow" className="hover:text-foreground">Workflow</Link>
-            <Link href="#setup" className="hover:text-foreground">Setup</Link>
-            <Link href="https://clawdeploy.co/login" className="rounded-md border border-border px-3 py-1.5 text-foreground">
+            <Link href="#architecture" className="hover:text-foreground">
+              Architecture
+            </Link>
+            <Link href="#workflow" className="hover:text-foreground">
+              Workflow
+            </Link>
+            <Link href="#setup" className="hover:text-foreground">
+              Setup
+            </Link>
+            <Link
+              href="https://clawdeploy.co/login"
+              className="rounded-md border border-border px-3 py-1.5 text-foreground"
+            >
               Control Plane
             </Link>
           </nav>
@@ -36,7 +46,8 @@ export default function HomePage() {
               Deploy OpenClaw with a control plane, runner fleet, and Telegram routing.
             </h1>
             <p className="text-base text-muted-foreground">
-              ClawDeploy provisions runner containers on DigitalOcean droplets, routes messages through the control plane, and enforces billing and kill-switch policies.
+              ClawDeploy provisions runner containers on DigitalOcean droplets, routes messages
+              through the control plane, and enforces billing and kill-switch policies.
             </p>
             <div className="flex flex-wrap gap-3">
               <Link
