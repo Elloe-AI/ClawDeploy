@@ -1,0 +1,298 @@
+import express from "express";
+import { z } from "zod";
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import crypto from "node:crypto";
+
+const app = express();
+app.use(express.json({ limit: "1mb" }));
+
+const port = Number(process.env.PORT ?? "8082");
+const controlPlaneUrl = process.env.CONTROL_PLANE_URL;
+const instanceId = process.env.INSTANCE_ID;
+const runnerSecret = process.env.RUNNER_SECRET;
+const hostAgentSecret = process.env.HOST_AGENT_SHARED_SECRET;
+const openclawBin = process.env.OPENCLAW_BIN ?? "";
+const clawDeployMode = (process.env.CLAWDEPLOY_MODE ?? "true").toLowerCase() === "true";
+
+if (clawDeployMode) {
+  // OpenClaw Telegram hooks (vendor/openclaw-chat-api) rely on TELEGRAM_* env vars. Strip them in ClawDeploy mode.
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith("TELEGRAM_")) {
+      delete process.env[key];
+    }
+  }
+}
+
+if (!controlPlaneUrl || !instanceId || !runnerSecret || !hostAgentSecret) {
+  throw new Error("CONTROL_PLANE_URL, INSTANCE_ID, RUNNER_SECRET, and HOST_AGENT_SHARED_SECRET are required");
+}
+
+const maxExecutionMs = Number(process.env.MAX_EXECUTION_TIME_MS ?? "300000");
+const maxMessagesPerMin = Number(process.env.MAX_MESSAGES_PER_MIN ?? "60");
+const maxConcurrency = Number(process.env.MAX_CONCURRENCY ?? "1");
+
+let activeRequests = 0;
+const recentRequests: number[] = [];
+
+const executeSchema = z.object({
+  input: z.string().min(1),
+  timeoutMs: z.number().optional()
+});
+
+function pruneRequests() {
+  const cutoff = Date.now() - 60_000;
+  while (recentRequests.length > 0 && recentRequests[0] < cutoff) {
+    recentRequests.shift();
+  }
+}
+
+function getOpenClawArgs() {
+  const raw = process.env.OPENCLAW_ARGS;
+  if (!raw) return [];
+  if (raw.trim().startsWith("[")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.map(String);
+      }
+    } catch {
+      return [];
+    }
+  }
+  return raw.split(" ").filter((part) => part.length > 0);
+}
+
+// OpenClaw emits structured output. Normalize to a consistent message shape for the control plane.
+type StructuredMessage = {
+  type: string;
+  text: string;
+  confidence?: number;
+  metadata?: Record<string, unknown>;
+};
+
+function normalizeOpenClawOutput(stdout: string, stderr: string): StructuredMessage[] {
+  const trimmed = stdout.trim() || stderr.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter((item) => item && typeof item === "object" && typeof item.text === "string")
+        .map((item) => ({
+          type: typeof item.type === "string" ? item.type : "signal",
+          text: item.text,
+          confidence: typeof item.confidence === "number" ? item.confidence : undefined,
+          metadata: typeof item.metadata === "object" && item.metadata ? item.metadata : undefined
+        }));
+    }
+    if (parsed && typeof parsed === "object") {
+      if (Array.isArray(parsed.messages)) {
+        return parsed.messages
+          .filter((item: StructuredMessage) => item && typeof item.text === "string")
+          .map((item: StructuredMessage) => ({
+            type: typeof item.type === "string" ? item.type : "signal",
+            text: item.text,
+            confidence: typeof item.confidence === "number" ? item.confidence : undefined,
+            metadata: typeof item.metadata === "object" && item.metadata ? item.metadata : undefined
+          }));
+      }
+      if (typeof (parsed as StructuredMessage).text === "string") {
+        return [
+          {
+            type: typeof (parsed as StructuredMessage).type === "string" ? (parsed as StructuredMessage).type : "signal",
+            text: (parsed as StructuredMessage).text,
+            confidence:
+              typeof (parsed as StructuredMessage).confidence === "number"
+                ? (parsed as StructuredMessage).confidence
+                : undefined,
+            metadata:
+              typeof (parsed as StructuredMessage).metadata === "object" && (parsed as StructuredMessage).metadata
+                ? (parsed as StructuredMessage).metadata
+                : undefined
+          }
+        ];
+      }
+    }
+  } catch {
+    // Non-JSON output is treated as a single message.
+  }
+
+  return [{ type: "signal", text: trimmed }];
+}
+
+function buildOpenClawEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  if (clawDeployMode) {
+    // OpenClaw Telegram hooks (vendor/openclaw-chat-api) read TELEGRAM_* env vars. Strip them in ClawDeploy mode.
+    for (const key of Object.keys(env)) {
+      if (key.startsWith("TELEGRAM_")) {
+        delete env[key];
+      }
+    }
+  }
+  env.CLAWDEPLOY_MODE = clawDeployMode ? "true" : "false";
+  return env;
+}
+
+async function registerRunner() {
+  const response = await fetch(`${controlPlaneUrl}/api/instances/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      instanceId,
+      runnerSecret,
+      runnerVersion: "0.1.0"
+    })
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Registration failed: ${text}`);
+  }
+}
+
+async function sendHeartbeat() {
+  await fetch(`${controlPlaneUrl}/api/instances/${instanceId}/heartbeat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      runnerSecret,
+      requestsProcessed: recentRequests.length
+    })
+  });
+}
+
+function startRegistrationLoop() {
+  const attempt = async () => {
+    try {
+      await registerRunner();
+      console.log(JSON.stringify({ level: "info", event: "runner.registered" }));
+    } catch (error) {
+      console.error(JSON.stringify({ level: "error", event: "runner.register_failed", message: (error as Error).message }));
+      setTimeout(attempt, 5000);
+    }
+  };
+  attempt();
+}
+
+startRegistrationLoop();
+setInterval(() => {
+  sendHeartbeat().catch((error) => {
+    console.error(JSON.stringify({ level: "error", event: "runner.heartbeat_failed", message: (error as Error).message }));
+  });
+}, 30_000);
+
+app.get("/health", (_req, res) => {
+  res.json({ status: "healthy", instanceId, uptime: process.uptime() });
+});
+
+app.post("/execute", async (req, res) => {
+  const secret = req.header("x-host-agent-secret");
+  if (secret !== hostAgentSecret) {
+    res.status(401).json({ error: "unauthorized", message: "Invalid host agent secret" });
+    return;
+  }
+
+  const parsed = executeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    res.status(400).json({ error: "invalid_request", message: "Invalid execute payload" });
+    return;
+  }
+
+  pruneRequests();
+  if (recentRequests.length >= maxMessagesPerMin) {
+    res.status(429).json({ error: "rate_limited", message: "Runner rate limit exceeded" });
+    return;
+  }
+
+  if (activeRequests >= maxConcurrency) {
+    res.status(429).json({ error: "busy", message: "Runner is at max concurrency" });
+    return;
+  }
+
+  if (!openclawBin) {
+    res.status(500).json({ error: "openclaw_missing", message: "OPENCLAW_BIN is not configured" });
+    return;
+  }
+
+  try {
+    await fs.promises.access(openclawBin, fs.constants.X_OK);
+  } catch {
+    res.status(500).json({ error: "openclaw_missing", message: `OpenClaw binary not found at ${openclawBin}` });
+    return;
+  }
+
+  const requestId = crypto.randomUUID();
+  const timeoutMs = Math.min(parsed.data.timeoutMs ?? maxExecutionMs, maxExecutionMs);
+  const args = getOpenClawArgs();
+  const startedAt = Date.now();
+  let responded = false;
+  let timedOut = false;
+
+  activeRequests += 1;
+  recentRequests.push(Date.now());
+
+  const child = spawn(openclawBin, args, { stdio: ["pipe", "pipe", "pipe"], env: buildOpenClawEnv() });
+  let stdout = "";
+  let stderr = "";
+
+  child.stdout.on("data", (chunk) => {
+    stdout += chunk.toString();
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr += chunk.toString();
+  });
+
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    child.kill("SIGKILL");
+  }, timeoutMs);
+
+  child.on("error", (error) => {
+    clearTimeout(timeout);
+    activeRequests -= 1;
+    if (!responded) {
+      responded = true;
+      res.status(500).json({ error: "openclaw_error", message: error.message, requestId });
+    }
+  });
+
+  child.on("close", (code) => {
+    clearTimeout(timeout);
+    activeRequests -= 1;
+    const durationMs = Date.now() - startedAt;
+    const exitCode = typeof code === "number" ? code : 1;
+
+    if (!responded) {
+      responded = true;
+      if (timedOut) {
+        res.status(504).json({
+          error: "execution_timeout",
+          message: `Execution exceeded ${timeoutMs}ms`,
+          requestId
+        });
+      } else {
+        const messages = normalizeOpenClawOutput(stdout, stderr);
+        const output = messages.map((message) => message.text).filter(Boolean).join("\n");
+        res.json({
+          requestId,
+          output,
+          messages,
+          exitCode,
+          durationMs
+        });
+      }
+    }
+  });
+
+  child.stdin.write(JSON.stringify({ input: parsed.data.input }));
+  child.stdin.end();
+});
+
+app.listen(port, () => {
+  console.log(JSON.stringify({ level: "info", event: "runner.started", port }));
+});

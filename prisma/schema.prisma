@@ -1,0 +1,146 @@
+// prisma/schema.prisma
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum InstanceStatus {
+  provisioning
+  running
+  disabled
+  stopped
+  error
+}
+
+enum BillingStatus {
+  trialing
+  active
+  past_due
+  canceled
+  incomplete
+}
+
+enum Provider {
+  telegram
+}
+
+enum HostStatus {
+  active
+  draining
+  offline
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  workspaceId  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace      Workspace? @relation(fields: [workspaceId], references: [id])
+  ownedWorkspace Workspace? @relation("WorkspaceOwner")
+
+  @@index([workspaceId])
+}
+
+model Workspace {
+  id                   String        @id @default(uuid())
+  name                 String
+  ownerUserId          String        @unique
+  billingStatus        BillingStatus @default(trialing)
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  owner     User       @relation("WorkspaceOwner", fields: [ownerUserId], references: [id])
+  users     User[]
+  instances Instance[]
+  events    Event[]
+
+  @@index([billingStatus])
+}
+
+model Host {
+  id               String     @id @default(uuid())
+  name             String
+  baseUrl          String
+  region           String
+  status           HostStatus @default(active)
+  capacityCpu      Int
+  capacityMemoryMb Int
+  usedCpu          Int        @default(0)
+  usedMemoryMb     Int        @default(0)
+  lastHeartbeatAt  DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  instances Instance[]
+
+  @@index([status])
+}
+
+model Instance {
+  id               String         @id @default(uuid())
+  workspaceId      String
+  hostId           String
+  name             String
+  status           InstanceStatus @default(provisioning)
+  runnerSecretHash String
+  runnerSecretSalt String
+  runnerId         String?
+  runnerPort       Int?
+  lastHeartbeatAt  DateTime?
+  killEnabled      Boolean        @default(false)
+  cpuLimit         Int            @default(1)
+  memoryLimitMb    Int            @default(1024)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  host      Host      @relation(fields: [hostId], references: [id])
+  channels  Channel[]
+  events    Event[]
+
+  @@index([workspaceId])
+  @@index([hostId])
+  @@index([status])
+}
+
+model Channel {
+  id              String   @id @default(uuid())
+  instanceId      String
+  provider        Provider
+  externalId      String
+  botTokenEncrypted String
+  webhookSecret   String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  instance Instance @relation(fields: [instanceId], references: [id])
+
+  @@index([instanceId])
+  @@index([provider, externalId])
+}
+
+model Event {
+  id          String   @id @default(uuid())
+  workspaceId String
+  instanceId  String?
+  type        String
+  message     String
+  meta        Json?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  instance  Instance? @relation(fields: [instanceId], references: [id])
+
+  @@index([workspaceId])
+  @@index([instanceId])
+}

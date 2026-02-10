@@ -1,0 +1,23 @@
+{
+  "name": "clawdeploy",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "node infra/scripts/dev.mjs",
+    "dev:servers": "concurrently \"npm --workspace apps/control-plane run dev\" \"npm --workspace apps/host-agent run dev\"",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:reset": "prisma migrate reset",
+    "db:seed": "node prisma/seed.mjs",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "eslint": "^9.18.0",
+    "prisma": "^5.22.0",
+    "typescript": "^5.6.3"
+  }
+}
