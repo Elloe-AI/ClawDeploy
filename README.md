@@ -14,7 +14,7 @@ Production base URL: `https://clawdeploy.co`
 Telegram -> Control Plane -> Host Agent -> Runner -> OpenClaw
             |                 |
             |                 -> Docker Engine
-            -> Postgres + Redis
+            -> Postgres
 ```
 
 - Control plane: Next.js app with API routes, billing, and message forwarding.
@@ -28,7 +28,7 @@ clawdeploy/
 ├── apps/
 │   ├── control-plane/      # Next.js web + API
 │   ├── runner/             # OpenClaw runner process
-│   └── host-agent/         # Host process on droplets
+│   ├── host-agent/         # Host process on droplets
 │   ├── instance-console/   # Instance console UI
 │   └── landing/            # Marketing site
 ├── vendor/
@@ -39,14 +39,13 @@ clawdeploy/
 │   └── scripts/            # Provisioning and host scripts
 ├── packages/
 │   ├── shared-types/       # Cross-service TypeScript types
-│   ├── crypto-utils/       # Encryption and signing helpers
-│   └── rate-limiter/       # Redis-backed rate limiter
+│   └── crypto-utils/       # Encryption and signing helpers
 └── docs/
 ```
 
 ## Local development (high level)
 
-1. Start Postgres and Redis.
+1. Start Postgres.
 2. Configure `.env` files for the control plane and host agent.
 3. Run Prisma migrations and seed the host table.
 4. Start the control plane and host agent.

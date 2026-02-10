@@ -23,7 +23,7 @@ Telegram -> Control Plane -> Host Agent -> Runner -> OpenClaw
 
 ## Development Setup
 
-- Start Postgres and Redis using `infra/docker/docker-compose.yml`
+- Start Postgres using `infra/docker/docker-compose.yml`
 - Configure `apps/control-plane/.env` and `apps/host-agent/.env`
 - Run Prisma migrations and seed a host record
 - Start control plane and host agent
@@ -56,5 +56,5 @@ Production base URL: `https://clawdeploy.co`
 
 - Add droplets to increase host capacity
 - Increase runner container count per host within CPU/memory limits
-- Enforce API and message rate limits via Redis
+- Enforce API and message rate limits in the control plane process
 - Use billing status to gate provisioning and message execution

@@ -15,21 +15,13 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "ClawDeploy Instance Console",
   description: "ClawDeploy instance console",
-  icons: {
-    icon: "/favicon.ico",
-  },
   openGraph: {
     title: "ClawDeploy Instance Console",
     description: "ClawDeploy instance console",
     type: "website",
     url: "https://clawdeploy.co",
     siteName: "ClawDeploy Instance Console",
-    locale: "en_US",
-    images: [
-      {
-        url: "/favicon.ico",
-      },
-    ],
+    locale: "en_US"
   },
 };
 

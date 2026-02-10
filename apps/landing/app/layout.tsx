@@ -1,41 +1,22 @@
-import React from "react"
-import type { Metadata, Viewport } from 'next'
+import type { Metadata, Viewport } from "next"
+import { Analytics } from "@vercel/analytics/next"
+import { ThemeProvider } from "@/components/theme-provider"
+import "./globals.css"
+import { Geist, Geist_Mono } from "next/font/google"
 
-import { Analytics } from '@vercel/analytics/next'
-import { ThemeProvider } from '@/components/theme-provider'
-import './globals.css'
-
-import { Geist, Geist_Mono, Geist as Font_Geist, Geist_Mono as Font_Geist_Mono, Source_Serif_4 as Font_Source_Serif_4 } from 'next/font/google'
-
-// Initialize fonts
-const _geist = Font_Geist({ subsets: ['latin'], weight: ["100", "200", "300", "400", "500", "600", "700", "800", "900"] })
-const _geistMono = Font_Geist_Mono({ subsets: ['latin'], weight: ["100", "200", "300", "400", "500", "600", "700", "800", "900"] })
-const _sourceSerif_4 = Font_Source_Serif_4({ subsets: ['latin'], weight: ["200", "300", "400", "500", "600", "700", "800", "900"] })
+const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] })
+const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] })
 
 export const metadata: Metadata = {
-  title: 'OpenKnot AI - Composable AI Agents You Can Trust',
-  description: 'Build reliable, auditable AI agents with clear boundaries. OpenKnot AI provides composable, inspectable, and production-ready AI infrastructure.',
-  keywords: ['AI agents', 'AI infrastructure', 'composable AI', 'auditable AI', 'machine learning', 'AI orchestration'],
-  authors: [{ name: 'OpenKnot AI' }],
+  title: "ClawDeploy",
+  description: "Managed deployment and control plane for OpenClaw runners.",
+  keywords: ["OpenClaw", "deployment", "runner", "control plane", "Telegram"],
+  authors: [{ name: "ClawDeploy" }],
   openGraph: {
-    title: 'OpenKnot AI - Composable AI Agents You Can Trust',
-    description: 'Build reliable, auditable AI agents with clear boundaries.',
-    type: 'website',
-    images: [
-      {
-        url: '/og-image.png',
-        width: 1200,
-        height: 630,
-        alt: 'OpenKnot AI',
-      },
-    ],
-  },
-  twitter: {
-    card: 'summary_large_image',
-    title: 'OpenKnot AI - Composable AI Agents You Can Trust',
-    description: 'Build reliable, auditable AI agents with clear boundaries.',
-    images: ['/og-image.png'],
-  },
+    title: "ClawDeploy",
+    description: "Managed deployment and control plane for OpenClaw runners.",
+    type: "website"
+  }
 }
 
 export const viewport: Viewport = {
@@ -52,10 +33,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`font-sans antialiased`}>
+      <body className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}>
         <ThemeProvider
           attribute="class"
-          defaultTheme="dark"
+          defaultTheme="system"
           enableSystem
           disableTransitionOnChange
         >

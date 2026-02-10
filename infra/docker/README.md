@@ -16,13 +16,13 @@ docker build -f infra/docker/Dockerfile.runner -t clawdeploy-runner:dev .
 
 ## Development vs production usage
 
-- development uses local image builds and `docker compose` for Postgres and Redis
+- development uses local image builds and `docker compose` for Postgres
 - production builds run in CI and are pushed to a registry
 - the host agent pulls the runner image by tag when provisioning containers
 
 ## Docker Compose
 
-`infra/docker/docker-compose.yml` starts Postgres and Redis for local development.
+`infra/docker/docker-compose.yml` starts Postgres for local development.
 
 ```bash
 docker compose -f infra/docker/docker-compose.yml up -d

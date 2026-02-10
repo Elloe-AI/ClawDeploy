@@ -11,8 +11,8 @@ Required arguments:
 - `--cpu` CPU limit
 - `--memory` Memory limit (MB)
 - `--host-agent-url` Host agent base URL
-- `--shared-secret` Host agent shared secret
-- `--control-plane-url` Control plane base URL
+- `--shared-secret` Host agent shared secret (derived as `sha256("host-agent:" + STRIPE_SECRET_KEY)`)
+- `--control-plane-url` Control plane base URL (written into runner config)
 - `--runner-secret` Runner registration secret
 
 Example:
@@ -24,7 +24,7 @@ Example:
   --cpu 1 \
   --memory 1024 \
   --host-agent-url http://localhost:8081 \
-  --shared-secret local-agent-shared-secret \
+  --shared-secret $SHARED_SECRET \
   --control-plane-url http://localhost:3000 \
   --runner-secret $RUNNER_SECRET
 ```
@@ -45,26 +45,15 @@ Example:
 ./stop-runner.sh \
   --id $INSTANCE_ID \
   --host-agent-url http://localhost:8081 \
-  --shared-secret local-agent-shared-secret
+  --shared-secret $SHARED_SECRET
 ```
 
 ## bootstrap-host.sh
 
-Bootstraps a DigitalOcean droplet with Docker, enables the Docker service, and opens port 8081 for the host agent.
-
-Required environment variables:
-
-- `CONTROL_PLANE_URL`
-- `AGENT_ID`
-- `AGENT_SHARED_SECRET`
-- `RUNNER_IMAGE`
+Bootstraps a DigitalOcean droplet with Docker, enables the Docker service, opens port 8081 for the host agent, and creates the instance storage directory.
 
 Example:
 
 ```bash
-CONTROL_PLANE_URL=https://clawdeploy.co \
-AGENT_ID=do-nyc1-01 \
-AGENT_SHARED_SECRET=$AGENT_SHARED_SECRET \
-RUNNER_IMAGE=clawdeploy-runner:prod \
 ./bootstrap-host.sh
 ```

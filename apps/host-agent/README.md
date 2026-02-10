@@ -12,23 +12,16 @@ The host agent runs on a DigitalOcean droplet and manages runner containers thro
 ## Environment variables
 
 ```env
-NODE_ENV=development
 PORT=8081
-AGENT_ID=local-host
-AGENT_SHARED_SECRET=local-agent-shared-secret
-RUNNER_IMAGE=clawdeploy-runner:dev
-RUNNER_CPU_LIMIT=1
-RUNNER_MEMORY_LIMIT_MB=1024
+STRIPE_SECRET_KEY=
+OPENAI_API_KEY=
 RUNNER_PORT_START=9100
 RUNNER_PORT_END=9200
-CLAWDEPLOY_MODE=true
 RUNNER_MAX_EXECUTION_TIME_MS=300000
 RUNNER_MAX_MESSAGES_PER_MIN=60
 RUNNER_MAX_CONCURRENCY=1
 RUNNER_OPENCLAW_BIN=/usr/local/bin/openclaw
 RUNNER_OPENCLAW_ARGS=
-CONTROL_PLANE_URL=http://localhost:3000
-LOG_LEVEL=info
 ```
 
 ## API endpoints
@@ -56,5 +49,5 @@ npm --workspace apps/host-agent run dev
 ## Security assumptions
 
 - host agent API is restricted to control plane IPs or private networking
-- all requests require a shared secret
+- all requests require a shared secret derived from `STRIPE_SECRET_KEY`
 - Docker socket access is limited to the host agent service

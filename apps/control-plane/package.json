@@ -12,7 +12,6 @@
   },
   "dependencies": {
     "@clawdeploy/crypto-utils": "*",
-    "@clawdeploy/rate-limiter": "*",
     "@clawdeploy/shared-types": "*",
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^2.4.3",

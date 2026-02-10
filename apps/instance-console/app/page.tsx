@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import ChatInput from "@/components/chat-input";
 import MarkdownMessage from "@/components/markdown-message";
-import Image from "next/image";
 import Link from "next/link";
 
 const CONTROL_PLANE_URL = (process.env.NEXT_PUBLIC_CONTROL_PLANE_URL ?? "").replace(/\/$/, "");
@@ -452,13 +451,9 @@ export default function InstanceConsole() {
       <header className="sticky top-0 z-20 border-b border-zinc-900/60 bg-background/80 backdrop-blur">
         <div className="mx-auto flex h-14 w-full max-w-screen-2xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
           <div className="flex min-w-0 items-center gap-3">
-            <Image
-              src="/logo.png"
-              alt="ClawDeploy"
-              width={1200}
-              height={1200}
-              className="aspect-square size-8 shrink-0 rounded-md bg-black p-1 object-contain"
-            />
+            <div className="flex size-8 shrink-0 items-center justify-center rounded-md border border-zinc-900/60 bg-black text-[11px] font-semibold text-zinc-200">
+              CD
+            </div>
             <div className="min-w-0">
               <div className="truncate text-sm font-medium leading-tight">
                 ClawDeploy Instance Console
@@ -650,13 +645,9 @@ export default function InstanceConsole() {
                         className={`flex w-full gap-3 ${isUser ? "justify-end" : ""}`}
                       >
                         {!isUser && (
-                          <Image
-                            src="/logo.png"
-                            alt="ClawDeploy"
-                            width={32}
-                            height={32}
-                            className="mt-0.5 hidden size-8 shrink-0 rounded-full border border-zinc-900/60 bg-black p-1 object-contain shadow-sm sm:block"
-                          />
+                          <div className="mt-0.5 hidden size-8 shrink-0 items-center justify-center rounded-full border border-zinc-900/60 bg-black text-[10px] font-semibold text-zinc-200 shadow-sm sm:flex">
+                            CD
+                          </div>
                         )}
                         <div
                           className={`w-full ${isUser ? "max-w-[92%] sm:max-w-[80%]" : "max-w-full"}`}
