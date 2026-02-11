@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
 import { decryptToken } from "@/lib/crypto";
@@ -7,10 +8,18 @@ import { executeRunner } from "@/lib/host-agent";
 import { getMessageLimiter } from "@/lib/rate-limit";
 import { isBillingActive } from "@/lib/billing";
 import { isHeartbeatStale } from "@/lib/instances";
+import {
+  buildAgentInput,
+  extractSignalOutput,
+  formatSignalTelegramMessage,
+  parseMarketStateFromText,
+  type MarketState
+} from "@/lib/signal-contract";
 import type { TelegramWebhookUpdate } from "@clawdeploy/shared-types";
 
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 const MAX_EXECUTION_TIME_MS = 300_000;
+const MAX_MESSAGES_PER_MIN = 60;
 
 export async function POST(request: NextRequest) {
   const payload = (await request.json().catch(() => null)) as TelegramWebhookUpdate | null;
@@ -73,6 +82,35 @@ export async function POST(request: NextRequest) {
     return jsonError("runner_missing", "Runner is not registered", 503);
   }
 
+  let marketState: MarketState;
+  try {
+    marketState = parseMarketStateFromText(text);
+  } catch (error) {
+    await prisma.event.create({
+      data: {
+        workspaceId: instance.workspaceId,
+        instanceId: instance.id,
+        type: "telegram_invalid_input",
+        message: "Telegram payload could not be parsed as market data",
+        meta: { chatId, error: (error as Error).message }
+      }
+    });
+
+    try {
+      const botToken = decryptToken(channel.botTokenEncrypted);
+      await sendTelegramMessage({
+        botToken,
+        chatId,
+        text:
+          "Unable to parse market payload. Send a Polymarket market JSON payload.\n\nMode: Signal-only (no auto-trading)"
+      });
+    } catch {
+      // Ignore follow-up messaging failures
+    }
+
+    return jsonOk({ status: "invalid_market" });
+  }
+
   await prisma.event.create({
     data: {
       workspaceId: instance.workspaceId,
@@ -85,20 +123,47 @@ export async function POST(request: NextRequest) {
 
   try {
     const timeoutMs = MAX_EXECUTION_TIME_MS;
+    const executionId = crypto.randomUUID();
+    const agentInput = buildAgentInput({
+      instanceId: instance.id,
+      executionId,
+      marketState,
+      maxMessagesPerMin: MAX_MESSAGES_PER_MIN
+    });
     const result = await executeRunner({
       hostBaseUrl: instance.host.baseUrl,
       runnerId: instance.runnerId,
-      input: text,
+      input: JSON.stringify(agentInput),
       timeoutMs
     });
 
     const botToken = decryptToken(channel.botTokenEncrypted);
-    const output = result.output.length > 0 ? result.output : "Runner completed without output";
+    const signal = extractSignalOutput(result.messages, result.output);
+    if (!signal) {
+      await prisma.event.create({
+        data: {
+          workspaceId: instance.workspaceId,
+          instanceId: instance.id,
+          type: "telegram_invalid_output",
+          message: "Runner returned invalid signal output",
+          meta: { chatId, requestId: result.requestId, executionId }
+        }
+      });
+
+      await sendTelegramMessage({
+        botToken,
+        chatId,
+        text:
+          "No valid signal returned. Signal-only mode requires BUY_YES, BUY_NO, or HOLD.\n\nMode: Signal-only (no auto-trading)"
+      });
+
+      return jsonOk({ status: "invalid_signal" });
+    }
 
     await sendTelegramMessage({
       botToken,
       chatId,
-      text: output
+      text: formatSignalTelegramMessage(signal, marketState)
     });
 
     await prisma.event.create({
@@ -107,7 +172,7 @@ export async function POST(request: NextRequest) {
         instanceId: instance.id,
         type: "telegram_outbound",
         message: "Telegram response sent",
-        meta: { chatId, requestId: result.requestId }
+        meta: { chatId, requestId: result.requestId, executionId, signal: signal.signal }
       }
     });
 
@@ -129,7 +194,7 @@ export async function POST(request: NextRequest) {
       await sendTelegramMessage({
         botToken,
         chatId,
-        text: `Execution failed: ${message}`
+        text: `Execution failed. Signal-only mode; no auto-trading.\nReason: ${message}`
       });
     } catch {
       // Ignore follow-up messaging failures

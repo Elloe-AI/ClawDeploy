@@ -119,6 +119,8 @@ export default function InstanceDetail({ instanceId }: { instanceId: string }) {
         <p>Host: {instance.host.name} ({instance.host.region})</p>
         <p>CPU limit: {instance.cpuLimit}</p>
         <p>Memory limit: {instance.memoryLimitMb} MB</p>
+        <p className="note">Signal-only mode. No auto-trading. Kill switch always available.</p>
+        <p className="note">Agents are run remotely via Simmers. ClawDeploy does not copy or alter agent logic.</p>
         <button className="danger" onClick={killInstance} disabled={killLoading || instance.killEnabled}>
           {killLoading ? "Stopping..." : "Kill instance"}
         </button>
@@ -127,6 +129,7 @@ export default function InstanceDetail({ instanceId }: { instanceId: string }) {
 
       <div className="card">
         <div className="section-title">Connect Telegram</div>
+        <p className="note">Telegram messages are signal-only and never execute trades.</p>
         <div className="form-row">
           <label>Bot token</label>
           <input value={botToken} onChange={(event) => setBotToken(event.target.value)} />

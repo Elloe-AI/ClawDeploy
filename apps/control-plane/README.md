@@ -25,11 +25,13 @@ The control plane is a Next.js application that serves the web UI and API for Cl
 CONTROL_PLANE_URL=http://localhost:3000
 DATABASE_URL=postgresql://clawdeploy:clawdeploy@localhost:5432/clawdeploy
 STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
 ```
 
 `CONTROL_PLANE_URL` must be the public base URL used for webhook callbacks and redirects.
 
 Session signing and token encryption keys are derived from `STRIPE_SECRET_KEY`.
+Stripe webhook signatures are verified using `STRIPE_WEBHOOK_SECRET` and the `stripe-signature` header.
 
 ## Run locally
 
@@ -69,3 +71,10 @@ Production base URL: `https://clawdeploy.co`
 - `GET /api/billing/status` Billing status
 - `POST /api/billing/checkout` Create Stripe checkout session
 - `POST /api/billing/webhook` Stripe webhook handler
+
+## File upload limits
+
+- Max file size: 5MB per file
+- Max files per instance: 20
+
+To adjust limits, update `MAX_FILE_SIZE_BYTES` and `MAX_FILES_PER_INSTANCE` in `apps/control-plane/src/app/api/instances/[id]/files/route.ts`.

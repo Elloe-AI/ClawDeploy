@@ -79,6 +79,42 @@ function pruneRequests() {
   }
 }
 
+const marketStateSchema = z.object({
+  market_id: z.string().min(1),
+  question: z.string().min(1),
+  outcomes: z.object({
+    YES: z.object({ price: z.number().finite() }),
+    NO: z.object({ price: z.number().finite() })
+  }),
+  volume: z.number().finite(),
+  liquidity: z.number().finite(),
+  end_time: z.string().datetime(),
+  timestamp: z.string().datetime(),
+  source: z.literal("polymarket")
+});
+
+const agentInputSchema = z.object({
+  context: z.object({
+    instance_id: z.string().min(1),
+    execution_id: z.string().min(1),
+    timestamp: z.string().datetime()
+  }),
+  market_state: marketStateSchema,
+  constraints: z.object({
+    mode: z.literal("signal_only"),
+    max_messages_per_min: z.number().int().positive()
+  })
+});
+
+const signalOutputSchema = z.object({
+  signal: z.enum(["BUY_YES", "BUY_NO", "HOLD"]),
+  confidence: z.number().finite(),
+  reasoning: z.string().min(1),
+  warnings: z.array(z.string()).default([])
+});
+
+type AgentInput = z.infer<typeof agentInputSchema>;
+type SignalOutput = z.infer<typeof signalOutputSchema>;
 
 // OpenClaw emits structured output. Normalize to a consistent message shape for the control plane.
 type StructuredMessage = {
@@ -88,57 +124,33 @@ type StructuredMessage = {
   metadata?: Record<string, unknown>;
 };
 
-function normalizeOpenClawOutput(stdout: string, stderr: string): StructuredMessage[] {
+function parseAgentInput(raw: string): AgentInput {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Agent input must be JSON");
+  }
+  const result = agentInputSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error("Agent input does not match required contract");
+  }
+  return result.data;
+}
+
+function parseSignalOutput(stdout: string, stderr: string): SignalOutput | null {
   const trimmed = stdout.trim() || stderr.trim();
   if (!trimmed) {
-    return [];
+    return null;
   }
-
   try {
     const parsed = JSON.parse(trimmed);
-    if (Array.isArray(parsed)) {
-      return parsed
-        .filter((item) => item && typeof item === "object" && typeof item.text === "string")
-        .map((item) => ({
-          type: typeof item.type === "string" ? item.type : "signal",
-          text: item.text,
-          confidence: typeof item.confidence === "number" ? item.confidence : undefined,
-          metadata: typeof item.metadata === "object" && item.metadata ? item.metadata : undefined
-        }));
-    }
-    if (parsed && typeof parsed === "object") {
-      if (Array.isArray(parsed.messages)) {
-        return parsed.messages
-          .filter((item: StructuredMessage) => item && typeof item.text === "string")
-          .map((item: StructuredMessage) => ({
-            type: typeof item.type === "string" ? item.type : "signal",
-            text: item.text,
-            confidence: typeof item.confidence === "number" ? item.confidence : undefined,
-            metadata: typeof item.metadata === "object" && item.metadata ? item.metadata : undefined
-          }));
-      }
-      if (typeof (parsed as StructuredMessage).text === "string") {
-        return [
-          {
-            type: typeof (parsed as StructuredMessage).type === "string" ? (parsed as StructuredMessage).type : "signal",
-            text: (parsed as StructuredMessage).text,
-            confidence:
-              typeof (parsed as StructuredMessage).confidence === "number"
-                ? (parsed as StructuredMessage).confidence
-                : undefined,
-            metadata:
-              typeof (parsed as StructuredMessage).metadata === "object" && (parsed as StructuredMessage).metadata
-                ? (parsed as StructuredMessage).metadata
-                : undefined
-          }
-        ];
-      }
-    }
+    const result = signalOutputSchema.safeParse(parsed);
+    if (!result.success) return null;
+    return result.data;
   } catch {
-    // Non-JSON output is treated as a single message.
+    return null;
   }
-
-  return [{ type: "signal", text: trimmed }];
 }
 
 function buildOpenClawEnv(): NodeJS.ProcessEnv {
@@ -216,6 +228,14 @@ app.post("/execute", async (req, res) => {
     return;
   }
 
+  let agentInput: AgentInput;
+  try {
+    agentInput = parseAgentInput(parsed.data.input);
+  } catch (error) {
+    res.status(400).json({ error: "invalid_agent_input", message: (error as Error).message });
+    return;
+  }
+
   pruneRequests();
   if (recentRequests.length >= maxMessagesPerMin) {
     res.status(429).json({ error: "rate_limited", message: "Runner rate limit exceeded" });
@@ -289,8 +309,27 @@ app.post("/execute", async (req, res) => {
           requestId
         });
       } else {
-        const messages = normalizeOpenClawOutput(stdout, stderr);
-        const output = messages.map((message) => message.text).filter(Boolean).join("\n");
+        const signalOutput = parseSignalOutput(stdout, stderr);
+        if (!signalOutput) {
+          res.json({
+            requestId,
+            output: "",
+            messages: [],
+            exitCode,
+            durationMs
+          });
+          return;
+        }
+
+        const messages: StructuredMessage[] = [
+          {
+            type: "signal",
+            text: signalOutput.signal,
+            confidence: signalOutput.confidence,
+            metadata: { reasoning: signalOutput.reasoning, warnings: signalOutput.warnings }
+          }
+        ];
+        const output = JSON.stringify(signalOutput);
         res.json({
           requestId,
           output,
@@ -302,7 +341,7 @@ app.post("/execute", async (req, res) => {
     }
   });
 
-  child.stdin.write(JSON.stringify({ input: parsed.data.input }));
+  child.stdin.write(JSON.stringify(agentInput));
   child.stdin.end();
 });
 

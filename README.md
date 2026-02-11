@@ -46,7 +46,7 @@ clawdeploy/
 ## Local development (high level)
 
 1. Start Postgres.
-2. Configure `.env` files for the control plane and host agent.
+2. Configure `.env` files for the control plane and host agent (including `STRIPE_WEBHOOK_SECRET` for Stripe webhook verification).
 3. Run Prisma migrations and seed the host table.
 4. Start the control plane and host agent.
 5. Create an instance to provision a runner.

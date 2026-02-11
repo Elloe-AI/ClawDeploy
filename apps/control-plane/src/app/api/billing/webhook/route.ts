@@ -3,6 +3,7 @@ import type Stripe from "stripe";
 import { prisma } from "@/lib/db";
 import { jsonError, jsonOk } from "@/lib/http";
 import { getStripe } from "@/lib/stripe";
+import { logInfo, logWarn } from "@/lib/logger";
 
 function mapStatus(status: string): "trialing" | "active" | "past_due" | "canceled" | "incomplete" {
   switch (status) {
@@ -22,18 +23,26 @@ function mapStatus(status: string): "trialing" | "active" | "past_due" | "cancel
 export async function POST(request: NextRequest) {
   try {
     const stripe = getStripe();
+    const rawBody = await request.text();
+    const signature = request.headers.get("stripe-signature");
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!signature || !webhookSecret) {
+      logWarn("stripe.webhook.missing_signature", {
+        hasSignature: Boolean(signature),
+        hasSecret: Boolean(webhookSecret)
+      });
+      return jsonError("invalid_signature", "Invalid Stripe webhook signature", 400);
+    }
 
-    const body = await request.text();
     let event: Stripe.Event;
     try {
-      const parsed = JSON.parse(body) as { id?: string };
-      if (!parsed?.id) {
-        return jsonError("bad_request", "Missing Stripe event id", 400);
-      }
-      event = await stripe.events.retrieve(parsed.id);
+      event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);
     } catch (error) {
-      return jsonError("bad_request", (error as Error).message, 400);
+      logWarn("stripe.webhook.invalid_signature", { error: (error as Error).message });
+      return jsonError("invalid_signature", "Invalid Stripe webhook signature", 400);
     }
+
+    logInfo("stripe.webhook.verified", { id: event.id, type: event.type });
 
     if (event.type === "checkout.session.completed") {
       const session = event.data.object as Stripe.Checkout.Session;

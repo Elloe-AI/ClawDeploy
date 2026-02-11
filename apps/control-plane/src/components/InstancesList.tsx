@@ -18,6 +18,8 @@ export default function InstancesList() {
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [creating, setCreating] = useState(false);
+  const [simmersAgentRef, setSimmersAgentRef] = useState<string | null>(null);
+  const [simmersConfirmed, setSimmersConfirmed] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -42,7 +44,21 @@ export default function InstancesList() {
     load();
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const source = params.get("source");
+    const agent = params.get("agent");
+    if (source === "simmers" && agent) {
+      setSimmersAgentRef(agent);
+    }
+  }, []);
+
   async function createInstance() {
+    if (simmersAgentRef && !simmersConfirmed) {
+      setError("Confirm the Simmers agent reference before creating an instance.");
+      return;
+    }
     setCreating(true);
     setError(null);
     try {
@@ -73,9 +89,24 @@ export default function InstancesList() {
         <label>Instance name</label>
         <input value={name} onChange={(event) => setName(event.target.value)} />
       </div>
-      <button onClick={createInstance} disabled={creating}>
+      <button onClick={createInstance} disabled={creating || (simmersAgentRef !== null && !simmersConfirmed)}>
         {creating ? "Creating..." : "Create instance"}
       </button>
+      {simmersAgentRef ? (
+        <div className="form-row">
+          <p className="note">Simmers agent: {simmersAgentRef}</p>
+          <label className="note">
+            <input
+              type="checkbox"
+              checked={simmersConfirmed}
+              onChange={(event) => setSimmersConfirmed(event.target.checked)}
+            />{" "}
+            I understand this agent runs remotely via Simmers.
+          </label>
+        </div>
+      ) : null}
+      <p className="note">Signal-only mode. No auto-trading. Kill switch always available.</p>
+      <p className="note">Agents are run remotely via Simmers. ClawDeploy does not copy or alter agent logic.</p>
       {error && <div className="error">{error}</div>}
       {loading ? (
         <p>Loading instances...</p>

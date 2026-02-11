@@ -7,6 +7,8 @@ import { jsonError, jsonOk } from "@/lib/http";
 
 const instanceIdSchema = z.string().uuid();
 const baseDir = "/var/lib/clawdeploy/instances";
+const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;
+const MAX_FILES_PER_INSTANCE = 20;
 
 function getInstanceRoot(instanceId: string) {
   return path.join(baseDir, instanceId);
@@ -102,11 +104,26 @@ export async function POST(request: Request, { params }: { params: { id: string 
   const filesDir = getFilesDir(parsed.data);
   await fs.promises.mkdir(filesDir, { recursive: true });
 
-  const saved: FilePayload[] = [];
+  const existingEntries = await fs.promises.readdir(filesDir, { withFileTypes: true });
+  const existingCount = existingEntries.filter((entry) => entry.isFile()).length;
+  const files: File[] = [];
 
   for (const item of incoming) {
     if (!item || typeof item === "string") {
       return jsonError("invalid_request", "Invalid file payload", 400);
+    }
+    files.push(item);
+  }
+
+  if (existingCount + files.length > MAX_FILES_PER_INSTANCE) {
+    return jsonError("file_limit_exceeded", `Instance file limit exceeded (${MAX_FILES_PER_INSTANCE})`, 413);
+  }
+
+  const saved: FilePayload[] = [];
+
+  for (const item of files) {
+    if (item.size > MAX_FILE_SIZE_BYTES) {
+      return jsonError("file_too_large", "File exceeds max size (5MB)", 413);
     }
 
     const rawName = typeof item.name === "string" ? item.name : "";

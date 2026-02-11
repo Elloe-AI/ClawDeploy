@@ -121,6 +121,8 @@ export default function InstanceConsole() {
   const [resourcesSaved, setResourcesSaved] = useState<string[]>([]);
   const [resourceSaving, setResourceSaving] = useState(false);
   const [resourceError, setResourceError] = useState<string | null>(null);
+  const [simmersAgentRef, setSimmersAgentRef] = useState<string | null>(null);
+  const [simmersConfirmed, setSimmersConfirmed] = useState(false);
 
   const selectedInstance = useMemo(() => {
     return instances.find((instance) => instance.id === selectedInstanceId) ?? null;
@@ -134,6 +136,15 @@ export default function InstanceConsole() {
 
   useEffect(() => {
     if (!CONTROL_PLANE_URL) return;
+
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const source = params.get("source");
+      const agent = params.get("agent");
+      if (source === "simmers" && agent) {
+        setSimmersAgentRef(agent);
+      }
+    }
 
     const loadAuth = async () => {
       setAuthStatus("loading");
@@ -498,8 +509,37 @@ export default function InstanceConsole() {
             {authError ?? "Unable to load session."}
           </div>
         ) : (
-          <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-            <aside className="space-y-6">
+          <div className="space-y-6">
+            <div className="rounded-3xl border border-zinc-900/60 bg-zinc-950/40 p-5 text-xs text-zinc-300">
+              <div className="text-sm font-semibold text-zinc-100">Signal-only execution</div>
+              <div className="mt-2 text-[11px] text-zinc-400">
+                ClawDeploy runs agents safely. It does not place trades, hold funds, or modify strategies.
+              </div>
+              <div className="mt-2 text-[11px] text-zinc-400">
+                Signal-only mode. No auto-trading. Kill switch always available in the control plane.
+              </div>
+              <div className="mt-2 text-[11px] text-zinc-400">
+                Agents are run remotely via Simmers. ClawDeploy does not copy or alter agent logic.
+              </div>
+            </div>
+
+            {simmersAgentRef ? (
+              <div className="rounded-3xl border border-zinc-900/60 bg-zinc-950/40 p-5 text-xs text-zinc-300">
+                <div className="text-sm font-semibold text-zinc-100">Simmers agent reference</div>
+                <div className="mt-2 text-[11px] text-zinc-400">Agent: {simmersAgentRef}</div>
+                <label className="mt-3 flex items-center gap-2 text-[11px] text-zinc-300">
+                  <input
+                    type="checkbox"
+                    checked={simmersConfirmed}
+                    onChange={(event) => setSimmersConfirmed(event.target.checked)}
+                  />
+                  I understand this agent runs remotely via Simmers.
+                </label>
+              </div>
+            ) : null}
+
+            <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+              <aside className="space-y-6">
               <div className="rounded-3xl border border-zinc-900/60 bg-zinc-950/40 p-5 shadow-sm">
                 <div className="text-sm font-semibold">Instance</div>
                 <div className="mt-3 space-y-3 text-xs text-zinc-300">
@@ -683,15 +723,22 @@ export default function InstanceConsole() {
                 <ChatInput
                   status={chatStatus}
                   onSubmit={handleSend}
-                  inputDisabled={!selectedInstanceId || authStatus !== "ready"}
+                  inputDisabled={
+                    !selectedInstanceId ||
+                    authStatus !== "ready" ||
+                    (simmersAgentRef !== null && !simmersConfirmed)
+                  }
                   placeholder={
-                    selectedInstanceId
-                      ? "Send a message to the instance..."
-                      : "Select an instance to start..."
+                    !selectedInstanceId
+                      ? "Select an instance to start..."
+                      : simmersAgentRef && !simmersConfirmed
+                        ? "Confirm Simmers agent reference to send..."
+                        : "Paste Polymarket market JSON to request a signal..."
                   }
                 />
               </div>
             </section>
+          </div>
           </div>
         )}
       </main>

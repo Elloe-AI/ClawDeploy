@@ -51,6 +51,8 @@ Production base URL: `https://clawdeploy.co`
 - host agent requests require `x-clawdeploy-agent-secret`
 - runner execution requires `x-host-agent-secret`
 - Telegram webhooks require the secret token configured at webhook setup
+- Stripe webhooks are verified with `stripe-signature` using `STRIPE_WEBHOOK_SECRET`
+- Instance file uploads are limited to 5MB per file and 20 files per instance
 
 ## Scaling Strategy
 

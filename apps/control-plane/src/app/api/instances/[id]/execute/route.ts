@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import crypto from "node:crypto";
 import { z } from "zod";
 import { getSessionFromCookies } from "@/lib/auth";
 import { prisma } from "@/lib/db";
@@ -7,6 +8,13 @@ import { executeRunner } from "@/lib/host-agent";
 import { isHeartbeatStale } from "@/lib/instances";
 import { isBillingActive } from "@/lib/billing";
 import { getMessageLimiter } from "@/lib/rate-limit";
+import {
+  buildAgentInput,
+  extractSignalOutput,
+  formatSignalSummary,
+  parseMarketStateFromText,
+  type MarketState
+} from "@/lib/signal-contract";
 
 const schema = z.object({
   input: z.string().min(1).max(4000)
@@ -14,6 +22,7 @@ const schema = z.object({
 
 const HEARTBEAT_TIMEOUT_MS = 90_000;
 const MAX_EXECUTION_TIME_MS = 300_000;
+const MAX_MESSAGES_PER_MIN = 60;
 
 export async function POST(request: NextRequest, { params }: { params: { id: string } }) {
   const session = await getSessionFromCookies();
@@ -69,14 +78,31 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
   }
 
   const timeoutMs = MAX_EXECUTION_TIME_MS;
+  let marketState: MarketState;
 
   try {
+    marketState = parseMarketStateFromText(parsed.data.input);
+  } catch (error) {
+    return jsonError("invalid_market", (error as Error).message, 400);
+  }
+
+  try {
+    const executionId = crypto.randomUUID();
+    const agentInput = buildAgentInput({
+      instanceId: instance.id,
+      executionId,
+      marketState,
+      maxMessagesPerMin: MAX_MESSAGES_PER_MIN
+    });
+
     const result = await executeRunner({
       hostBaseUrl: instance.host.baseUrl,
       runnerId: instance.runnerId,
-      input: parsed.data.input,
+      input: JSON.stringify(agentInput),
       timeoutMs
     });
+
+    const signal = extractSignalOutput(result.messages, result.output);
 
     await prisma.event.create({
       data: {
@@ -86,14 +112,35 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         message: "Runner executed message",
         meta: {
           requestId: result.requestId,
-          durationMs: result.durationMs
+          durationMs: result.durationMs,
+          executionId
         }
       }
     });
 
+    if (!signal) {
+      await prisma.event.create({
+        data: {
+          workspaceId: instance.workspaceId,
+          instanceId: instance.id,
+          type: "execute_invalid_output",
+          message: "Runner returned invalid signal output",
+          meta: { requestId: result.requestId, executionId }
+        }
+      });
+
+      return jsonOk({
+        requestId: result.requestId,
+        output:
+          "No valid signal returned. Signal-only mode requires BUY_YES, BUY_NO, or HOLD.",
+        exitCode: result.exitCode,
+        durationMs: result.durationMs
+      });
+    }
+
     return jsonOk({
       requestId: result.requestId,
-      output: result.output,
+      output: formatSignalSummary(signal, marketState),
       exitCode: result.exitCode,
       durationMs: result.durationMs
     });
